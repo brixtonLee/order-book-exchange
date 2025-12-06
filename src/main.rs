@@ -1,0 +1,36 @@
+use order_book_api::{create_router, Broadcaster, OrderBookEngine};
+use std::sync::Arc;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+#[tokio::main]
+async fn main() {
+    // Initialize tracing
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "order_book_api=debug,tower_http=debug".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    // Create the order book engine
+    let engine = Arc::new(OrderBookEngine::new());
+
+    // Create the WebSocket broadcaster
+    let broadcaster = Broadcaster::new();
+
+    // Create the router with WebSocket support
+    let app = create_router(engine, broadcaster);
+
+    // Define the address
+    let addr = "127.0.0.1:3000";
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+
+    tracing::info!("🚀 Order Book API server running on http://{}", addr);
+    tracing::info!("📊 Health check: http://{}/health", addr);
+    tracing::info!("📚 Swagger UI: http://{}/swagger-ui", addr);
+    tracing::info!("🔌 WebSocket: ws://{}/ws", addr);
+    
+    // Start the server
+    axum::serve(listener, app).await.unwrap();
+}
