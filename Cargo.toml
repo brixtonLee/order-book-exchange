@@ -22,5 +22,9 @@ tokio-stream = "0.1"
 futures = "0.3"
 dashmap = "6.0"
 
+# cTrader FIX API dependencies
+bytes = "1.5"
+tokio-util = { version = "0.7", features = ["codec"] }
+
 [dev-dependencies]
 criterion = "0.5"
