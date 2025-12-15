@@ -13,6 +13,22 @@ use super::messages::{
 };
 use super::market_data::{MarketTick, MarketDataParser};
 
+/// Lightweight message for async display
+/// Contains only essential FIX fields for minimal output
+#[derive(Debug, Clone)]
+struct DisplayMessage {
+    /// Symbol ID (Tag 55)
+    symbol: String,
+    /// Number of MD Entries (Tag 268)
+    num_entries: String,
+    /// MD Entry Type (Tag 269)
+    entry_type: String,
+    /// MD Entry Price (Tag 270)
+    entry_price: String,
+    /// Time elapsed since last message (ms)
+    elapsed_ms: i64,
+}
+
 pub struct CTraderFixClient {
     host: String,
     port: u16,
@@ -31,6 +47,8 @@ pub struct CTraderFixClient {
     last_message_time: Arc<StdMutex<Option<Instant>>>,
     /// Available trading symbols from security list response
     symbols: Arc<StdMutex<Vec<(u32, String, u8)>>>,
+    /// Channel for async display (non-blocking)
+    display_sender: Option<mpsc::UnboundedSender<DisplayMessage>>,
 }
 
 impl CTraderFixClient {
@@ -58,6 +76,7 @@ impl CTraderFixClient {
             parser: MarketDataParser::new(),
             last_message_time: Arc::new(StdMutex::new(None)),
             symbols: Arc::new(StdMutex::new(Vec::new())),
+            display_sender: None,
         }
     }
 
@@ -88,6 +107,7 @@ impl CTraderFixClient {
             parser: MarketDataParser::new(),
             last_message_time: Arc::new(StdMutex::new(None)),
             symbols: Arc::new(StdMutex::new(Vec::new())),
+            display_sender: None,
         };
 
         (client, rx)
@@ -104,6 +124,20 @@ impl CTraderFixClient {
         let stream = TcpStream::connect(format!("{}:{}", self.host, self.port)).await?;
         println!("✅ TCP connection established!");
 
+        // Spawn async display task for non-blocking output
+        let (display_tx, mut display_rx) = mpsc::unbounded_channel::<DisplayMessage>();
+        tokio::spawn(async move {
+            println!("📺 Display task started (async, non-blocking)\n");
+            while let Some(msg) = display_rx.recv().await {
+                println!("║ [ 55] Symbol      = {:<30}", msg.symbol);
+                println!("║ [268] NoMDEntries = {:<30}", msg.num_entries);
+                println!("║ [269] MDEntryType = {:<30}", msg.entry_type);
+                println!("║ [270] MDEntryPx   = {:<30}", msg.entry_price);
+                println!("║ ⏱️  Elapsed      = {}ms", msg.elapsed_ms);
+                println!();
+            }
+        });
+        self.display_sender = Some(display_tx);
 
         // Why mut on reader?
         // Reading requires mutable access to track internal position
@@ -431,7 +465,8 @@ impl CTraderFixClient {
         Ok(())
     }
 
-    /// Process market data using optimized parser and stream to channel
+    /// Process market data - lightweight extraction and async display
+    /// Non-blocking: sends to display channel instead of printing directly
     fn process_market_data(&self, raw_message: &str) {
         // Capture current time immediately for latency tracking
         let current_time = Instant::now();
@@ -451,37 +486,28 @@ impl CTraderFixClient {
             elapsed
         }; // Mutex lock is dropped here
 
-        // Use optimized parser
-        if let Some((symbol_id, entries)) = self.parser.parse_market_data(raw_message) {
-            let tick = self.parser.build_tick(symbol_id.clone(), entries);
+        // Lightweight field extraction (no heavy tick building)
+        let fields = parse_fix_message(raw_message);
 
-            // Display tick information with latency
-            println!("╔══════════════════════════════════════════════════════════════╗");
-            println!("║ 📊 MARKET TICK - Symbol ID: {:<35}║", symbol_id);
-            println!("║ ⏱️  Time since last message: {:<36}║", format!("{}ms", elapsed_ms));
-            println!("╠══════════════════════════════════════════════════════════════╣");
+        // Extract only the 4 essential fields
+        let display_msg = DisplayMessage {
+            symbol: fields.get(&55).cloned().unwrap_or_else(|| "N/A".to_string()),
+            num_entries: fields.get(&268).cloned().unwrap_or_else(|| "N/A".to_string()),
+            entry_type: fields.get(&269).cloned().unwrap_or_else(|| "N/A".to_string()),
+            entry_price: fields.get(&270).cloned().unwrap_or_else(|| "N/A".to_string()),
+            elapsed_ms,
+        };
 
-            if let Some(bid) = tick.bid_price {
-                println!("║ 💵 BID:  {:<51}║", format!("{} (size: {})", bid, tick.bid_size.unwrap_or_default()));
-            }
-            if let Some(ask) = tick.ask_price {
-                println!("║ 💶 ASK:  {:<51}║", format!("{} (size: {})", ask, tick.ask_size.unwrap_or_default()));
-            }
-            if let Some(mid) = tick.mid_price() {
-                println!("║ 📊 MID:  {:<51}║", mid);
-            }
-            if let Some(spread) = tick.spread() {
-                println!("║ 📏 SPREAD: {:<49}║", spread);
-            }
+        // Send to async display task (non-blocking!)
+        if let Some(ref tx) = self.display_sender {
+            let _ = tx.send(display_msg);
+        }
 
-            println!("╚══════════════════════════════════════════════════════════════╝");
-            println!();
-
-            // Send to channel if connected
-            if let Some(ref tx) = self.tick_sender {
-                if let Err(e) = tx.send(tick) {
-                    eprintln!("⚠️  Failed to send tick to channel: {}", e);
-                }
+        // Still build and send tick for other consumers if needed
+        if let Some(ref tx) = self.tick_sender {
+            if let Some((symbol_id, entries)) = self.parser.parse_market_data(raw_message) {
+                let tick = self.parser.build_tick(symbol_id, entries);
+                let _ = tx.send(tick);
             }
         }
     }
