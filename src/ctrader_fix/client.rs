@@ -267,46 +267,8 @@ impl CTraderFixClient {
         // Get message type
         let msg_type = fields.get(&35).map(|s| s.as_str()).unwrap_or("Unknown");
 
-        println!("╔══════════════════════════════════════════════════════════════╗");
-        println!("║ 📨 RECEIVED FIX MESSAGE                                      ║");
-        println!("╠══════════════════════════════════════════════════════════════╣");
-        println!("║ Message Type: {:48}║", format!("{} ({})",
-            match msg_type {
-                "A" => "Logon",
-                "0" => "Heartbeat",
-                "1" => "Test Request",
-                "5" => "Logout",
-                "W" => "Market Data Snapshot",
-                "X" => "Market Data Incremental Refresh",
-                "Y" => "Market Data Request Reject",
-                "x" => "Security List Request",
-                "y" => "Security List",
-                _ => "Other",
-            },
-            msg_type
-        ));
-        println!("╠══════════════════════════════════════════════════════════════╣");
-        println!("║ Raw Message:                                                 ║");
-        println!("║ {:<60} ║", format_for_display(raw_message));
-        println!("╠══════════════════════════════════════════════════════════════╣");
-        println!("║ Parsed Fields:                                               ║");
-
-        // Sort and display all fields
-        let mut sorted_fields: Vec<(&u32, &String)> = fields.iter().collect();
-        sorted_fields.sort_by_key(|(tag, _)| *tag);
-
-        for (tag, value) in sorted_fields {
-            let field_name = get_field_name(*tag);
-            let display = if value.len() > 40 {
-                format!("{}...", &value[..37])
-            } else {
-                value.clone()
-            };
-            println!("║ [{:>3}] {:<20} = {:<30} ║", tag, field_name, display);
-        }
-
-        println!("╚══════════════════════════════════════════════════════════════╝");
-        println!();
+        // Verbose message display removed for performance
+        // Market data display now handled by async display task
 
         // Handle specific message types
         match msg_type {
@@ -510,36 +472,5 @@ impl CTraderFixClient {
                 let _ = tx.send(tick);
             }
         }
-    }
-}
-
-fn get_field_name(tag: u32) -> &'static str {
-    match tag {
-        8 => "BeginString",
-        9 => "BodyLength",
-        10 => "CheckSum",
-        35 => "MsgType",
-        49 => "SenderCompID",
-        56 => "TargetCompID",
-        50 => "SenderSubID",
-        57 => "TargetSubID",
-        34 => "MsgSeqNum",
-        52 => "SendingTime",
-        98 => "EncryptMethod",
-        108 => "HeartBtInt",
-        141 => "ResetSeqNumFlag",
-        553 => "Username",
-        554 => "Password",
-        55 => "Symbol",
-        262 => "MDReqID",
-        263 => "SubscriptionReqType",
-        264 => "MarketDepth",
-        265 => "MDUpdateType",
-        146 => "NoRelatedSym",
-        268 => "NoMDEntries",
-        269 => "MDEntryType",
-        270 => "MDEntryPx",
-        271 => "MDEntrySize",
-        _ => "Unknown",
     }
 }
