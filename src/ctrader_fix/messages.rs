@@ -140,6 +140,7 @@ pub fn create_market_data_request(
     msg_seq_num: u32,
     symbol_ids: &[&str],
 ) -> String {
+
     let sending_time = Utc::now().format("%Y%m%d-%H:%M:%S%.3f").to_string();
     let md_req_id = format!("REQ-{}", Utc::now().timestamp_millis());
 
@@ -203,6 +204,94 @@ pub fn create_heartbeat(
     msg.add_field(52, Utc::now().format("%Y%m%d-%H:%M:%S%.3f").to_string()); // SendingTime
 
     msg.build("0")
+}
+
+/// Create a Security List Request message (MsgType=x)
+/// Requests the list of available trading symbols from cTrader
+pub fn create_security_list_request(
+    sender_comp_id: &str,
+    target_comp_id: &str,
+    sender_sub_id: &str,
+    target_sub_id: &str,
+    msg_seq_num: u32,
+    symbol_id: Option<&str>,
+) -> String {
+    let mut msg = FixMessage::new();
+
+    // Standard FIX fields
+    msg.add_field(49, sender_comp_id);        // SenderCompID
+    msg.add_field(56, target_comp_id);        // TargetCompID
+    msg.add_field(50, sender_sub_id);         // SenderSubID
+    msg.add_field(57, target_sub_id);         // TargetSubID
+    msg.add_field(34, msg_seq_num);           // MsgSeqNum
+    msg.add_field(52, Utc::now().format("%Y%m%d-%H:%M:%S%.3f").to_string()); // SendingTime
+
+    // Security List Request specific fields
+    let req_id = format!("SECLST-{}", Utc::now().timestamp_millis());
+    msg.add_field(320, req_id);               // SecurityReqID (unique ID)
+    msg.add_field(559, 0);                    // SecurityListRequestType (0 = Symbol)
+
+    // Optional: request specific symbol
+    if let Some(sym_id) = symbol_id {
+        msg.add_field(55, sym_id);            // Symbol
+    }
+
+    msg.build("x")
+}
+
+/// Parse a Security List Response message (MsgType=y)
+/// Returns (request_id, result_code, symbols)
+pub fn parse_security_list_response(raw_message: &str) -> Option<(String, u32, Vec<(u32, String, u8)>)> {
+    let fields = parse_fix_message(raw_message);
+
+    // Extract response metadata
+    let req_id = fields.get(&320)?.clone();                    // SecurityReqID
+    let result = fields.get(&560)?.parse::<u32>().ok()?;      // SecurityRequestResult
+    let num_symbols = fields.get(&146)                         // NoRelatedSym
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    // Parse repeating group of symbols
+    let mut symbols = Vec::with_capacity(num_symbols);
+    let mut current_id: Option<u32> = None;
+    let mut current_name: Option<String> = None;
+    let mut current_digits: Option<u8> = None;
+
+    // Parse field by field to handle repeating groups
+    for field in raw_message.split('\x01') {
+        if let Some((tag_str, value)) = field.split_once('=') {
+            if let Ok(tag) = tag_str.parse::<u32>() {
+                match tag {
+                    55 => {
+                        // New symbol ID - save previous symbol if complete
+                        if let (Some(id), Some(name), Some(digits)) = (current_id, current_name.take(), current_digits) {
+                            symbols.push((id, name, digits));
+                        }
+                        // Start new symbol
+                        current_id = value.parse::<u32>().ok();
+                        current_name = None;
+                        current_digits = None;
+                    }
+                    1007 => {
+                        // Symbol name
+                        current_name = Some(value.to_string());
+                    }
+                    1008 => {
+                        // Symbol digits
+                        current_digits = value.parse::<u8>().ok();
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Save last symbol if complete
+    if let (Some(id), Some(name), Some(digits)) = (current_id, current_name, current_digits) {
+        symbols.push((id, name, digits));
+    }
+
+    Some((req_id, result, symbols))
 }
 
 /// Format FIX message for display (replace SOH with |)

@@ -2,11 +2,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::time::{interval, Duration};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Instant;
 use tokio::sync::{Mutex, mpsc};
 
 use super::messages::{
     create_logon_message, create_market_data_request, create_heartbeat,
+    create_security_list_request, parse_security_list_response,
     parse_fix_message, format_for_display,
 };
 use super::market_data::{MarketTick, MarketDataParser};
@@ -25,6 +27,10 @@ pub struct CTraderFixClient {
     tick_sender: Option<mpsc::UnboundedSender<MarketTick>>,
     /// Parser for market data messages
     parser: MarketDataParser,
+    /// Timestamp of last received message (for latency tracking)
+    last_message_time: Arc<StdMutex<Option<Instant>>>,
+    /// Available trading symbols from security list response
+    symbols: Arc<StdMutex<Vec<(u32, String, u8)>>>,
 }
 
 impl CTraderFixClient {
@@ -50,6 +56,8 @@ impl CTraderFixClient {
             msg_seq_num: Arc::new(Mutex::new(1)),
             tick_sender: None,
             parser: MarketDataParser::new(),
+            last_message_time: Arc::new(StdMutex::new(None)),
+            symbols: Arc::new(StdMutex::new(Vec::new())),
         }
     }
 
@@ -78,6 +86,8 @@ impl CTraderFixClient {
             msg_seq_num: Arc::new(Mutex::new(1)),
             tick_sender: Some(tx),
             parser: MarketDataParser::new(),
+            last_message_time: Arc::new(StdMutex::new(None)),
+            symbols: Arc::new(StdMutex::new(Vec::new())),
         };
 
         (client, rx)
@@ -179,7 +189,8 @@ impl CTraderFixClient {
                     accumulated_data.extend_from_slice(&buffer[..n]);
 
                     // Try to extract complete FIX messages (terminated by SOH after checksum)
-                    while let Some(msg) = self.extract_message(&mut accumulated_data) {
+                    while let Some(msg) = self.
+                        extract_message(&mut accumulated_data) {
                         self.handle_message(&msg, &writer).await?;
                     }
                 }
@@ -234,6 +245,8 @@ impl CTraderFixClient {
                 "W" => "Market Data Snapshot",
                 "X" => "Market Data Incremental Refresh",
                 "Y" => "Market Data Request Reject",
+                "x" => "Security List Request",
+                "y" => "Security List",
                 _ => "Other",
             },
             msg_type
@@ -264,8 +277,8 @@ impl CTraderFixClient {
         // Handle specific message types
         match msg_type {
             "A" => {
-                // Logon response received, send Market Data Request
-                println!("✅ Logon successful! Sending Market Data Request...\n");
+                // Logon response received, send Security List Request
+                println!("✅ Logon successful! Sending Security List Request...\n");
 
                 let seq = {
                     let mut s = self.msg_seq_num.lock().await;
@@ -274,19 +287,19 @@ impl CTraderFixClient {
                     current
                 };
 
-                // Request data for XAUUSD (Gold) - symbol ID "41"
-                let md_request = create_market_data_request(
+                // Request list of all available symbols
+                let sec_list_req = create_security_list_request(
                     &self.sender_comp_id,
                     &self.target_comp_id,
                     &self.sender_sub_id,
                     &self.target_sub_id,
                     seq,
-                    &["41"], // Symbol ID 41 = XAUUSD (Gold)
+                    None,  // None = request ALL symbols
                 );
 
-                println!("📤 Market Data Request: {}", format_for_display(&md_request));
+                println!("📤 Security List Request: {}", format_for_display(&sec_list_req));
                 let mut w = writer.lock().await;
-                w.write_all(md_request.as_bytes()).await?;
+                w.write_all(sec_list_req.as_bytes()).await?;
                 w.flush().await?;
             }
             "1" => {
@@ -309,14 +322,14 @@ impl CTraderFixClient {
                 w.flush().await?;
             }
             "W" => {
-                // Market Data Snapshot - this contains the price data!
-                println!("💰 Market Data Snapshot received!");
                 self.process_market_data(raw_message);
             }
             "X" => {
-                // Market Data Incremental Refresh - streaming updates!
-                println!("⚡ Market Data Incremental Refresh!");
                 self.process_market_data(raw_message);
+            }
+            "y" => {
+                // Security List Response - parse and display symbols
+                self.handle_security_list_response(raw_message, writer).await?;
             }
             _ => {}
         }
@@ -324,15 +337,128 @@ impl CTraderFixClient {
         Ok(())
     }
 
+    /// Handle Security List Response (MsgType=y)
+    /// Parses and displays the list of available trading symbols
+    /// Then sends a Market Data Request for the first few symbols
+    async fn handle_security_list_response(
+        &mut self,
+        raw_message: &str,
+        writer: &Arc<Mutex<OwnedWriteHalf>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some((req_id, result, symbols)) = parse_security_list_response(raw_message) {
+            println!("╔══════════════════════════════════════════════════════════════╗");
+            println!("║ 📋 SECURITY LIST RESPONSE                                    ║");
+            println!("╠══════════════════════════════════════════════════════════════╣");
+            println!("║ Request ID: {:<50}║", req_id);
+            println!("║ Result: {:<54}║", match result {
+                0 => "✅ Valid request",
+                1 => "❌ Invalid/unsupported request",
+                2 => "⚠️  No instruments found",
+                3 => "🔒 Not authorized",
+                4 => "⏳ Data temporarily unavailable",
+                5 => "❌ Request not supported",
+                _ => "❓ Unknown result",
+            });
+            println!("║ Total Symbols: {:<47}║", symbols.len());
+            println!("╠══════════════════════════════════════════════════════════════╣");
+
+            if !symbols.is_empty() {
+                println!("║ Available Symbols:                                           ║");
+                println!("║ {:<4} {:<20} {:<6}                           ║", "ID", "Name", "Digits");
+                println!("╠══════════════════════════════════════════════════════════════╣");
+
+                // Display up to 20 symbols (to avoid flooding console)
+                let display_count = symbols.len().min(20);
+                for (id, name, digits) in symbols.iter().take(display_count) {
+                    println!("║ {:<4} {:<20} {:<6}                           ║", id, name, digits);
+                }
+
+                if symbols.len() > 20 {
+                    println!("║ ... and {} more symbols                                   ║", symbols.len() - 20);
+                }
+            }
+
+            println!("╚══════════════════════════════════════════════════════════════╝");
+            println!();
+
+            // Store symbols for later use
+            {
+                let mut stored_symbols = self.symbols.lock().unwrap();
+                *stored_symbols = symbols.clone();
+            }
+
+            // Send Market Data Request using received symbols
+            if !symbols.is_empty() && result == 0 {
+                println!("📊 Sending Market Data Request for symbols...\n");
+
+                let seq = {
+                    let mut s = self.msg_seq_num.lock().await;
+                    let current = *s;
+                    *s += 1;
+                    current
+                };
+
+                // Request market data for first few symbols (limit to avoid overwhelming)
+                let symbol_ids: Vec<String> = symbols
+                    .iter()
+                    .take(5)  // Take first 5 symbols
+                    .map(|(id, name, _)| {
+                        println!("  ✓ Subscribing to: {} (ID: {})", name, id);
+                        id.to_string()
+                    })
+                    .collect();
+
+                let symbol_id_refs: Vec<&str> = symbol_ids.iter().map(|s| s.as_str()).collect();
+
+                let md_request = create_market_data_request(
+                    &self.sender_comp_id,
+                    &self.target_comp_id,
+                    &self.sender_sub_id,
+                    &self.target_sub_id,
+                    seq,
+                    &symbol_id_refs,
+                );
+
+                println!("\n📤 Market Data Request: {}", format_for_display(&md_request));
+                let mut w = writer.lock().await;
+                w.write_all(md_request.as_bytes()).await?;
+                w.flush().await?;
+            }
+        } else {
+            eprintln!("⚠️  Failed to parse Security List Response");
+        }
+
+        Ok(())
+    }
+
     /// Process market data using optimized parser and stream to channel
     fn process_market_data(&self, raw_message: &str) {
+        // Capture current time immediately for latency tracking
+        let current_time = Instant::now();
+
+        // Calculate elapsed time since last message
+        let elapsed_ms = {
+            let mut last_time = self.last_message_time.lock().unwrap();
+
+            // Calculate elapsed using Option::map for clean code
+            let elapsed = last_time
+                .map(|prev| prev.elapsed().as_millis() as i64)
+                .unwrap_or(0);
+
+            // Update last message time for next calculation
+            *last_time = Some(current_time);
+
+            elapsed
+        }; // Mutex lock is dropped here
+
         // Use optimized parser
         if let Some((symbol_id, entries)) = self.parser.parse_market_data(raw_message) {
             let tick = self.parser.build_tick(symbol_id.clone(), entries);
 
-            // Display tick information
+            // Display tick information with latency
             println!("╔══════════════════════════════════════════════════════════════╗");
             println!("║ 📊 MARKET TICK - Symbol ID: {:<35}║", symbol_id);
+            println!("║ ⏱️  Time since last message: {:<36}║", format!("{}ms", elapsed_ms));
             println!("╠══════════════════════════════════════════════════════════════╣");
 
             if let Some(bid) = tick.bid_price {

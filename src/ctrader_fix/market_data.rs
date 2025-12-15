@@ -3,6 +3,24 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+/// Represents a trading symbol/instrument from cTrader
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Symbol {
+    /// Symbol ID (cTrader internal identifier)
+    pub id: u32,
+    /// Symbol name (e.g., "EURUSD", "GBPUSD")
+    pub name: String,
+    /// Number of decimal places for prices (0-5)
+    pub digits: u8,
+}
+
+impl Symbol {
+    /// Create a new symbol
+    pub fn new(id: u32, name: String, digits: u8) -> Self {
+        Self { id, name, digits }
+    }
+}
+
 /// High-performance market tick data structure
 /// Optimized for real-time streaming with minimal allocations
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +177,8 @@ impl MarketDataParser {
     /// Parse a single FIX field in the format "tag=value"
     /// Returns Some((tag, value)) if valid, None otherwise
     fn parse_fix_field(field: &str) -> Option<(u32, &str)> {
+        // split_once splits the string at the first occurrence of '='
+        // and_then will run the closure if the || equals to Some(T), if it is None, then skip the closure and return none
         field.split_once('=').and_then(|(tag_str, value)| {
             tag_str.parse::<u32>().ok().map(|tag| (tag, value))
         })
