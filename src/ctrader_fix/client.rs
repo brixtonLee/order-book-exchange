@@ -6,11 +6,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 use tokio::sync::{Mutex, mpsc};
 
-use super::messages::{
-    create_logon_message, create_market_data_request, create_heartbeat,
-    create_security_list_request, parse_security_list_response,
-    parse_fix_message, format_for_display,
-};
+use super::messages::{create_logon_message, create_market_data_request, create_heartbeat, create_security_list_request, parse_security_list_response, parse_fix_message, format_for_display, SymbolData};
 use super::market_data::{MarketTick, MarketDataParser};
 
 /// Lightweight message for async display
@@ -46,7 +42,7 @@ pub struct CTraderFixClient {
     /// Timestamp of last received message (for latency tracking)
     last_message_time: Arc<StdMutex<Option<Instant>>>,
     /// Available trading symbols from security list response
-    symbols: Arc<StdMutex<Vec<(u32, String, u8)>>>,
+    symbols: Arc<StdMutex<Vec<SymbolData>>>,
     /// Channel for async display (non-blocking)
     display_sender: Option<mpsc::UnboundedSender<DisplayMessage>>,
 }
@@ -333,6 +329,54 @@ impl CTraderFixClient {
         Ok(())
     }
 
+    fn display_security_list_header(request_id: &str, result_code: u32, symbol_data: &Vec<SymbolData>){
+        println!("╔══════════════════════════════════════════════════════════════╗");
+        println!("║ 📋 SECURITY LIST RESPONSE                                    ║");
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!("║ Request ID: {:<50}║", request_id);
+        println!("║ Result: {:<54}║", Self::format_security_result_code(result_code));
+        println!("║ Total Symbols: {:<47}║", symbol_data.len());
+        println!("╠══════════════════════════════════════════════════════════════╣");
+
+        if !symbol_data.is_empty() {
+            Self::display_symbol_data(symbol_data);
+        }
+
+        println!("╚══════════════════════════════════════════════════════════════╝");
+        println!();
+    }
+
+    fn format_security_result_code(result_code: u32) -> &'static str {
+        match result_code {
+            0 => "✅ Valid request",
+            1 => "❌ Invalid/unsupported request",
+            2 => "⚠️  No instruments found",
+            3 => "🔒 Not authorized",
+            4 => "⏳ Data temporarily unavailable",
+            5 => "❌ Request not supported",
+            _ => "❓ Unknown result",
+        }
+    }
+
+    fn display_symbol_data(symbol_data: &Vec<SymbolData>){
+        println!("║ Available Symbols:                                           ║");
+        println!("║ {:<4} {:<20} {:<6}                           ║", "ID", "Name", "Digits");
+        println!("╠══════════════════════════════════════════════════════════════╣");
+
+        // Display up to 20 symbols (to avoid flooding console)
+        let display_count = symbol_data.len().min(20);
+        for symbol_data in symbol_data.iter().take(display_count) {
+            println!("║ {:<4} {:<20} {:<6}                           ║", symbol_data.symbol_id, symbol_data.symbol_name, symbol_data.symbol_digits);
+        }
+
+        if symbol_data.len() > 20 {
+            println!("║ ... and {} more symbols                                   ║", symbol_data.len() - 20);
+        }
+    }
+
+
+
+
     /// Handle Security List Response (MsgType=y)
     /// Parses and displays the list of available trading symbols
     /// Then sends a Market Data Request for the first few symbols
@@ -342,40 +386,7 @@ impl CTraderFixClient {
         writer: &Arc<Mutex<OwnedWriteHalf>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some((req_id, result, symbols)) = parse_security_list_response(raw_message) {
-            println!("╔══════════════════════════════════════════════════════════════╗");
-            println!("║ 📋 SECURITY LIST RESPONSE                                    ║");
-            println!("╠══════════════════════════════════════════════════════════════╣");
-            println!("║ Request ID: {:<50}║", req_id);
-            println!("║ Result: {:<54}║", match result {
-                0 => "✅ Valid request",
-                1 => "❌ Invalid/unsupported request",
-                2 => "⚠️  No instruments found",
-                3 => "🔒 Not authorized",
-                4 => "⏳ Data temporarily unavailable",
-                5 => "❌ Request not supported",
-                _ => "❓ Unknown result",
-            });
-            println!("║ Total Symbols: {:<47}║", symbols.len());
-            println!("╠══════════════════════════════════════════════════════════════╣");
-
-            if !symbols.is_empty() {
-                println!("║ Available Symbols:                                           ║");
-                println!("║ {:<4} {:<20} {:<6}                           ║", "ID", "Name", "Digits");
-                println!("╠══════════════════════════════════════════════════════════════╣");
-
-                // Display up to 20 symbols (to avoid flooding console)
-                let display_count = symbols.len().min(20);
-                for (id, name, digits) in symbols.iter().take(display_count) {
-                    println!("║ {:<4} {:<20} {:<6}                           ║", id, name, digits);
-                }
-
-                if symbols.len() > 20 {
-                    println!("║ ... and {} more symbols                                   ║", symbols.len() - 20);
-                }
-            }
-
-            println!("╚══════════════════════════════════════════════════════════════╝");
-            println!();
+            Self::display_security_list_header(&req_id, result, &symbols);
 
             // Store symbols for later use
             {
@@ -397,10 +408,17 @@ impl CTraderFixClient {
                 // Request market data for first few symbols (limit to avoid overwhelming)
                 let symbol_ids: Vec<String> = symbols
                     .iter()
+                    .filter(|symbol_data| {
+                        let name_lower = symbol_data.symbol_name.to_lowercase();
+                        name_lower.contains("bitcoin") ||
+                            name_lower.contains("btc") ||
+                            name_lower.contains("ethereum") ||
+                            name_lower.contains("chainlink")
+                    })
                     .take(5)  // Take first 5 symbols
-                    .map(|(id, name, _)| {
-                        println!("  ✓ Subscribing to: {} (ID: {})", name, id);
-                        id.to_string()
+                    .map(|symbol_data| {
+                        println!("  ✓ Subscribing to: {} (ID: {})", symbol_data.symbol_name, symbol_data.symbol_id);
+                        symbol_data.symbol_id.to_string()
                     })
                     .collect();
 
