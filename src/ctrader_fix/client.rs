@@ -41,8 +41,6 @@ pub struct CTraderFixClient {
     parser: MarketDataParser,
     /// Timestamp of last received message (for latency tracking)
     last_message_time: Arc<StdMutex<Option<Instant>>>,
-    /// Available trading symbols from security list response
-    symbols: Arc<StdMutex<Vec<SymbolData>>>,
     /// Channel for async display (non-blocking)
     display_sender: Option<mpsc::UnboundedSender<DisplayMessage>>,
 }
@@ -71,7 +69,6 @@ impl CTraderFixClient {
             tick_sender: None,
             parser: MarketDataParser::new(),
             last_message_time: Arc::new(StdMutex::new(None)),
-            symbols: Arc::new(StdMutex::new(Vec::new())),
             display_sender: None,
         }
     }
@@ -102,7 +99,6 @@ impl CTraderFixClient {
             tick_sender: Some(tx),
             parser: MarketDataParser::new(),
             last_message_time: Arc::new(StdMutex::new(None)),
-            symbols: Arc::new(StdMutex::new(Vec::new())),
             display_sender: None,
         };
 
@@ -219,8 +215,8 @@ impl CTraderFixClient {
                     accumulated_data.extend_from_slice(&buffer[..n]);
 
                     // Try to extract complete FIX messages (terminated by SOH after checksum)
-                    while let Some(msg) = self.
-                        extract_message(&mut accumulated_data) {
+                    while let Some(msg) = 
+                        self.extract_message(&mut accumulated_data) {
                         self.handle_message(&msg, &writer).await?;
                     }
                 }
@@ -329,10 +325,8 @@ impl CTraderFixClient {
         Ok(())
     }
 
-    fn display_security_list_header(request_id: &str, result_code: u32, symbol_data: &Vec<SymbolData>){
-        println!("╔══════════════════════════════════════════════════════════════╗");
+    fn display_security_list_header(request_id: &str, result_code: u32, symbol_data: &[SymbolData]){
         println!("║ 📋 SECURITY LIST RESPONSE                                    ║");
-        println!("╠══════════════════════════════════════════════════════════════╣");
         println!("║ Request ID: {:<50}║", request_id);
         println!("║ Result: {:<54}║", Self::format_security_result_code(result_code));
         println!("║ Total Symbols: {:<47}║", symbol_data.len());
@@ -358,12 +352,11 @@ impl CTraderFixClient {
         }
     }
 
-    fn display_symbol_data(symbol_data: &Vec<SymbolData>){
+    fn display_symbol_data(symbol_data: &[SymbolData]){
         println!("║ Available Symbols:                                           ║");
         println!("║ {:<4} {:<20} {:<6}                           ║", "ID", "Name", "Digits");
         println!("╠══════════════════════════════════════════════════════════════╣");
 
-        // Display up to 20 symbols (to avoid flooding console)
         let display_count = symbol_data.len().min(20);
         for symbol_data in symbol_data.iter().take(display_count) {
             println!("║ {:<4} {:<20} {:<6}                           ║", symbol_data.symbol_id, symbol_data.symbol_name, symbol_data.symbol_digits);
@@ -387,12 +380,6 @@ impl CTraderFixClient {
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some((req_id, result, symbols)) = parse_security_list_response(raw_message) {
             Self::display_security_list_header(&req_id, result, &symbols);
-
-            // Store symbols for later use
-            {
-                let mut stored_symbols = self.symbols.lock().unwrap();
-                *stored_symbols = symbols.clone();
-            }
 
             // Send Market Data Request using received symbols
             if !symbols.is_empty() && result == 0 {
