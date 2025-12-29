@@ -1,6 +1,4 @@
 /target
-# Ignore all .md files
-*.md
 
 # BUT keep specific important ones
 !README.md
