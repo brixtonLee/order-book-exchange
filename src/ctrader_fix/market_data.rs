@@ -31,12 +31,8 @@ pub struct MarketTick {
     pub timestamp: DateTime<Utc>,
     /// Bid price
     pub bid_price: Option<Decimal>,
-    /// Bid size/volume
-    pub bid_size: Option<Decimal>,
     /// Ask price
     pub ask_price: Option<Decimal>,
-    /// Ask size/volume
-    pub ask_size: Option<Decimal>,
 }
 
 impl MarketTick {
@@ -46,9 +42,7 @@ impl MarketTick {
             symbol_id,
             timestamp: Utc::now(),
             bid_price: None,
-            bid_size: None,
             ask_price: None,
-            ask_size: None,
         }
     }
 
@@ -81,9 +75,7 @@ pub struct MarketDataEntry {
     /// Entry type: 0=Bid, 1=Offer/Ask, 2=Trade
     pub entry_type: MDEntryType,
     /// Price for this entry
-    pub price: Decimal,
-    /// Size/volume for this entry
-    pub size: Decimal,
+    pub price: Decimal
 }
 
 /// MD Entry Type enumeration
@@ -110,7 +102,6 @@ impl MDEntryType {
 struct EntryBuilder {
     entry_type: Option<MDEntryType>,
     price: Option<Decimal>,
-    size: Option<Decimal>,
 }
 
 impl EntryBuilder {
@@ -119,7 +110,6 @@ impl EntryBuilder {
         Self {
             entry_type: None,
             price: None,
-            size: None,
         }
     }
 
@@ -134,18 +124,14 @@ impl EntryBuilder {
     }
 
     /// Set the size from a FIX field value
-    fn set_size(&mut self, value: &str) {
-        self.size = Decimal::from_str(value).ok();
-    }
 
     /// Try to build a complete MarketDataEntry if all fields are present
     /// Returns Some(entry) if complete, None if any field is missing
     fn try_build(&self) -> Option<MarketDataEntry> {
-        match (self.entry_type, self.price, self.size) {
-            (Some(et), Some(p), Some(s)) => Some(MarketDataEntry {
+        match (self.entry_type, self.price) {
+            (Some(et), Some(p)) => Some(MarketDataEntry {
                 entry_type: et,
                 price: p,
-                size: s,
             }),
             _ => None,
         }
@@ -155,7 +141,6 @@ impl EntryBuilder {
     fn reset(&mut self) {
         self.entry_type = None;
         self.price = None;
-        self.size = None;
     }
 }
 
@@ -211,10 +196,6 @@ impl MarketDataParser {
                 // MDEntryPx - price for current entry
                 builder.set_price(value);
             }
-            271 => {
-                // MDEntrySize - volume/size for current entry
-                builder.set_size(value);
-            }
             _ => {
                 // Ignore unknown tags
             }
@@ -257,11 +238,9 @@ impl MarketDataParser {
             match entry.entry_type {
                 MDEntryType::Bid => {
                     tick.bid_price = Some(entry.price);
-                    tick.bid_size = Some(entry.size);
                 }
                 MDEntryType::Offer => {
                     tick.ask_price = Some(entry.price);
-                    tick.ask_size = Some(entry.size);
                 }
                 MDEntryType::Trade => {
                     // For trades, we might want to update both bid and ask

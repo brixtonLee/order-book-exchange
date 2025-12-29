@@ -65,16 +65,6 @@ impl FixToWebSocketBridge {
 
         // Also broadcast to wildcard channel for "all tickers"
         self.broadcaster.broadcast("ticker:*", ws_message);
-
-        // If you want verbose logging
-        if tick.is_complete() {
-            println!(
-                "🔔 WebSocket Broadcast: {} - Bid: {}, Ask: {}",
-                symbol,
-                tick.bid_price.unwrap(),
-                tick.ask_price.unwrap()
-            );
-        }
     }
 
     /// Run the bridge - consume ticks from channel and broadcast to WebSocket

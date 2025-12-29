@@ -395,14 +395,6 @@ impl CTraderFixClient {
                 // Request market data for first few symbols (limit to avoid overwhelming)
                 let symbol_ids: Vec<String> = symbols
                     .iter()
-                    .filter(|symbol_data| {
-                        let name_lower = symbol_data.symbol_name.to_lowercase();
-                        name_lower.contains("bitcoin") ||
-                            name_lower.contains("btc") ||
-                            name_lower.contains("ethereum") ||
-                            name_lower.contains("chainlink")
-                    })
-                    .take(5)  // Take first 5 symbols
                     .map(|symbol_data| {
                         println!("  ✓ Subscribing to: {} (ID: {})", symbol_data.symbol_name, symbol_data.symbol_id);
                         symbol_data.symbol_id.to_string()
@@ -457,18 +449,18 @@ impl CTraderFixClient {
         let fields = parse_fix_message(raw_message);
 
         // Extract only the 4 essential fields
-        let display_msg = DisplayMessage {
-            symbol: fields.get(&55).cloned().unwrap_or_else(|| "N/A".to_string()),
-            num_entries: fields.get(&268).cloned().unwrap_or_else(|| "N/A".to_string()),
-            entry_type: fields.get(&269).cloned().unwrap_or_else(|| "N/A".to_string()),
-            entry_price: fields.get(&270).cloned().unwrap_or_else(|| "N/A".to_string()),
-            elapsed_ms,
-        };
+        // let display_msg = DisplayMessage {
+        //     symbol: fields.get(&55).cloned().unwrap_or_else(|| "N/A".to_string()),
+        //     num_entries: fields.get(&268).cloned().unwrap_or_else(|| "N/A".to_string()),
+        //     entry_type: fields.get(&269).cloned().unwrap_or_else(|| "N/A".to_string()),
+        //     entry_price: fields.get(&270).cloned().unwrap_or_else(|| "N/A".to_string()),
+        //     elapsed_ms,
+        // };
 
-        // Send to async display task (non-blocking!)
-        if let Some(ref tx) = self.display_sender {
-            let _ = tx.send(display_msg);
-        }
+        // // Send to async display task (non-blocking!)
+        // if let Some(ref tx) = self.display_sender {
+        //     let _ = tx.send(display_msg);
+        // }
 
         // Still build and send tick for other consumers if needed
         if let Some(ref tx) = self.tick_sender {
