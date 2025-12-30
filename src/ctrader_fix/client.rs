@@ -43,6 +43,10 @@ pub struct CTraderFixClient {
     last_message_time: Arc<StdMutex<Option<Instant>>>,
     /// Channel for async display (non-blocking)
     display_sender: Option<mpsc::UnboundedSender<DisplayMessage>>,
+    /// Callback invoked when heartbeat is received
+    heartbeat_callback: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Callback invoked when security list response is received
+    security_list_callback: Option<Arc<dyn Fn(Vec<SymbolData>) + Send + Sync>>,
 }
 
 impl CTraderFixClient {
@@ -70,6 +74,8 @@ impl CTraderFixClient {
             parser: MarketDataParser::new(),
             last_message_time: Arc::new(StdMutex::new(None)),
             display_sender: None,
+            heartbeat_callback: None,
+            security_list_callback: None,
         }
     }
 
@@ -100,9 +106,21 @@ impl CTraderFixClient {
             parser: MarketDataParser::new(),
             last_message_time: Arc::new(StdMutex::new(None)),
             display_sender: None,
+            heartbeat_callback: None,
+            security_list_callback: None,
         };
 
         (client, rx)
+    }
+
+    /// Set callback to be invoked when heartbeat is received
+    pub fn set_heartbeat_callback(&mut self, callback: Arc<dyn Fn() + Send + Sync>) {
+        self.heartbeat_callback = Some(callback);
+    }
+
+    /// Set callback to be invoked when security list response is received
+    pub fn set_security_list_callback(&mut self, callback: Arc<dyn Fn(Vec<SymbolData>) + Send + Sync>) {
+        self.security_list_callback = Some(callback);
     }
 
     pub async fn connect_and_run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -290,6 +308,12 @@ impl CTraderFixClient {
                 w.write_all(sec_list_req.as_bytes()).await?;
                 w.flush().await?;
             }
+            "0" => {
+                // Heartbeat received - invoke callback
+                if let Some(ref callback) = self.heartbeat_callback {
+                    callback();
+                }
+            }
             "1" => {
                 // Test Request - respond with Heartbeat
                 let seq = {
@@ -308,6 +332,11 @@ impl CTraderFixClient {
                 let mut w = writer.lock().await;
                 w.write_all(hb.as_bytes()).await?;
                 w.flush().await?;
+
+                // Also invoke heartbeat callback when responding to test request
+                if let Some(ref callback) = self.heartbeat_callback {
+                    callback();
+                }
             }
             "W" => {
                 self.process_market_data(raw_message);
@@ -380,6 +409,11 @@ impl CTraderFixClient {
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some((req_id, result, symbols)) = parse_security_list_response(raw_message) {
             Self::display_security_list_header(&req_id, result, &symbols);
+
+            // Invoke security list callback with received symbols
+            if let Some(ref callback) = self.security_list_callback {
+                callback(symbols.clone());
+            }
 
             // Send Market Data Request using received symbols
             if !symbols.is_empty() && result == 0 {

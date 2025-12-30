@@ -8,7 +8,6 @@ use super::messages::WsMessage;
 #[derive(Clone)]
 pub struct Broadcaster {
     /// Channel subscriptions per topic (e.g., "orderbook:AAPL", "trades:AAPL", "ticker:AAPL")
-    /// 
     /// It's optimized for concurrent workloads and generally performs better than a mutex-wrapped HashMap when you have multiple threads accessing the map.
     channels: Arc<DashMap<String, broadcast::Sender<WsMessage>>>,
     /// Default channel capacity

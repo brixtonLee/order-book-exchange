@@ -66,6 +66,10 @@ async fn main() {
     // Create bridge
     let bridge = FixToWebSocketBridge::new(broadcaster.clone());
 
+    // Create datasource manager (not used in this binary, but required for router)
+    use order_book_api::DatasourceManager;
+    let datasource_manager = std::sync::Arc::new(DatasourceManager::new(broadcaster.clone()));
+
     // Spawn mock data generator
     println!("🎭 Starting mock market data generator...");
     let mock_handle = tokio::spawn(async move {
@@ -73,7 +77,7 @@ async fn main() {
     });
 
     // Create the HTTP/WebSocket router
-    let app = create_router(engine, broadcaster);
+    let app = create_router(engine, broadcaster, datasource_manager);
 
     // Define the address
     let addr = "127.0.0.1:3000";

@@ -4,7 +4,10 @@
       "Bash(mkdir:*)",
       "Bash(mv:*)",
       "Bash(HFT_FEATURES/HFT_FEATURES_ROADMAP.md)",
-      "Bash(cargo test --help:*)"
+      "Bash(cargo test --help:*)",
+      "Bash(cargo build:*)",
+      "Bash(curl:*)",
+      "Bash(chmod:*)"
     ],
     "deny": [],
     "ask": []

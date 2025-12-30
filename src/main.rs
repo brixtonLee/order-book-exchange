@@ -1,4 +1,4 @@
-use order_book_api::{create_router, Broadcaster, OrderBookEngine};
+use order_book_api::{create_router, Broadcaster, DatasourceManager, OrderBookEngine};
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -19,18 +19,22 @@ async fn main() {
     // Create the WebSocket broadcaster
     let broadcaster = Broadcaster::new();
 
-    // Create the router with WebSocket support
-    let app = create_router(engine, broadcaster);
+    // Create the datasource manager
+    let datasource_manager = Arc::new(DatasourceManager::new(broadcaster.clone()));
+
+    // Create the router with WebSocket support and datasource control
+    let app = create_router(engine, broadcaster, datasource_manager);
 
     // Define the address
     let addr = "127.0.0.1:3000";
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
 
     tracing::info!("🚀 Order Book API server running on http://{}", addr);
-    tracing::info!("📊 Health check: http://{}/health", addr);
+    tracing::info!("📊 Health check: http://{}/api/v1/health", addr);
     tracing::info!("📚 Swagger UI: http://{}/swagger-ui", addr);
     tracing::info!("🔌 WebSocket: ws://{}/ws", addr);
-    
+    tracing::info!("🔧 Datasource control: http://{}/api/v1/datasource/*", addr);
+
     // Start the server
     axum::serve(listener, app).await.unwrap();
 }

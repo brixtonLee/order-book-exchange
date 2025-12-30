@@ -55,6 +55,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🌉 Creating FIX → WebSocket bridge...");
     let bridge = FixToWebSocketBridge::new(broadcaster.clone());
 
+    // Create datasource manager (not used in this binary, but required for router)
+    use order_book_api::DatasourceManager;
+    let datasource_manager = std::sync::Arc::new(DatasourceManager::new(broadcaster.clone()));
+
     // Spawn FIX client connection task
     println!("📡 Connecting to cTrader FIX server...\n");
     let client_handle = tokio::spawn(async move {
@@ -70,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Create the HTTP/WebSocket router
-    let app = create_router(engine, broadcaster);
+    let app = create_router(engine, broadcaster, datasource_manager);
 
     // Define the address
     let addr = "127.0.0.1:3000";

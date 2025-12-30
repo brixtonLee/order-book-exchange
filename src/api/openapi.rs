@@ -1,9 +1,11 @@
 use utoipa::OpenApi;
 
 use crate::api::handlers;
+use crate::api::datasource_handlers;
 use crate::api::responses::*;
 use crate::metrics::SpreadMetrics;
 use crate::models::{Order, OrderSide, OrderStatus, OrderType};
+use crate::models::datasource::*;
 
 /// OpenAPI v1 specification
 #[derive(OpenApi)]
@@ -59,13 +61,13 @@ use crate::models::{Order, OrderSide, OrderStatus, OrderType};
 )]
 pub struct ApiDocV1;
 
-/// OpenAPI v2 specification (future version with additional features)
+/// OpenAPI v2 specification (with datasource control endpoints)
 #[derive(OpenApi)]
 #[openapi(
     info(
         title = "Order Book API",
         version = "2.0.0",
-        description = "A high-performance order matching engine and REST API built in Rust - Version 2.0 with enhanced features",
+        description = "A high-performance order matching engine and REST API built in Rust - Version 2.0 with FIX datasource control",
         contact(
             name = "Order Book API",
             url = "https://github.com/yourusername/order-book-api"
@@ -83,6 +85,11 @@ pub struct ApiDocV1;
         handlers::get_spread_metrics,
         handlers::get_trades,
         handlers::get_exchange_metrics,
+        // Datasource control endpoints
+        datasource_handlers::start_datasource,
+        datasource_handlers::stop_datasource,
+        datasource_handlers::get_datasource_status,
+        datasource_handlers::get_health,
     ),
     components(
         schemas(
@@ -101,9 +108,24 @@ pub struct ApiDocV1;
             TradeListResponse,
             ExchangeMetricsResponse,
             ErrorResponse,
+            // Datasource models
+            StartDatasourceRequest,
+            StartDatasourceResponse,
+            StopDatasourceResponse,
+            DatasourceStatus,
+            DatasourceMode,
+            SymbolInfo,
+            ConnectionInfo,
+            HealthStatus,
+            HealthState,
+            ConnectionState,
+            HeartbeatState,
+            FixCredentials,
         )
     ),
     tags(
+        (name = "health", description = "System health monitoring"),
+        (name = "datasource", description = "FIX datasource connection control"),
         (name = "Health", description = "Health check endpoints"),
         (name = "Orders", description = "Order management endpoints"),
         (name = "Order Book", description = "Order book and market data endpoints"),

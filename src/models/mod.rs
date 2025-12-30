@@ -1,6 +1,7 @@
 pub mod order;
 pub mod trade;
 pub mod orderbook;
+pub mod datasource;
 
 pub use order::{Order, OrderSide, OrderType, OrderStatus, TimeInForce, SelfTradePreventionMode};
 pub use trade::Trade;
