@@ -19,4 +19,3 @@ pub use datasource::DatasourceManager;
 pub use engine::{OrderBookEngine, OrderBookError};
 pub use models::{Order, OrderBook, OrderSide, OrderStatus, OrderType, Trade};
 pub use websocket::Broadcaster;
-pub use ctrader_fix::messages::SymbolData;

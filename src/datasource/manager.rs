@@ -1,5 +1,4 @@
 use crate::ctrader_fix::{CTraderFixClient, FixToWebSocketBridge};
-use crate::ctrader_fix::messages::SymbolData;
 use crate::models::datasource::*;
 use crate::websocket::broadcaster::Broadcaster;
 use std::collections::HashMap;
@@ -19,12 +18,13 @@ use tokio::sync::RwLock;
 ///  - Cleanup: Keeping handles to abort tasks on shutdown
 use tokio::task::JoinHandle;
 use chrono::Utc;
+use crate::ctrader_fix::symbol_data::symbol_parser::SymbolData;
 
 /// Manages FIX data source lifecycle, heartbeat tracking, and symbol subscriptions
 pub struct DatasourceManager {
     mode: Arc<RwLock<DatasourceMode>>,
     fix_client_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
-    bridge_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
+    bridge_handle: Arc<RwLock<Option<JoinHandle<()>>>>, 
     fix_config: Arc<RwLock<Option<FixConfig>>>,
     heartbeat_counter: Arc<AtomicU64>,
     connection_metrics: Arc<RwLock<Option<ConnectionMetrics>>>,

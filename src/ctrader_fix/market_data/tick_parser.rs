@@ -1,72 +1,6 @@
-use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
 use std::str::FromStr;
-
-/// Represents a trading symbol/instrument from cTrader
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Symbol {
-    /// Symbol ID (cTrader internal identifier)
-    pub id: u32,
-    /// Symbol name (e.g., "EURUSD", "GBPUSD")
-    pub name: String,
-    /// Number of decimal places for prices (0-5)
-    pub digits: u8,
-}
-
-impl Symbol {
-    /// Create a new symbol
-    pub fn new(id: u32, name: String, digits: u8) -> Self {
-        Self { id, name, digits }
-    }
-}
-
-/// High-performance market tick data structure
-/// Optimized for real-time streaming with minimal allocations
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MarketTick {
-    /// Symbol identifier (cTrader symbol ID)
-    pub symbol_id: String,
-    /// Timestamp when tick was received
-    pub timestamp: DateTime<Utc>,
-    /// Bid price
-    pub bid_price: Option<Decimal>,
-    /// Ask price
-    pub ask_price: Option<Decimal>,
-}
-
-impl MarketTick {
-    /// Create a new empty market tick
-    pub fn new(symbol_id: String) -> Self {
-        Self {
-            symbol_id,
-            timestamp: Utc::now(),
-            bid_price: None,
-            ask_price: None,
-        }
-    }
-
-    /// Calculate mid price if both bid and ask are available
-    pub fn mid_price(&self) -> Option<Decimal> {
-        match (self.bid_price, self.ask_price) {
-            (Some(bid), Some(ask)) => Some((bid + ask) / Decimal::from(2)),
-            _ => None,
-        }
-    }
-
-    /// Calculate spread if both bid and ask are available
-    pub fn spread(&self) -> Option<Decimal> {
-        match (self.bid_price, self.ask_price) {
-            (Some(bid), Some(ask)) => Some(ask - bid),
-            _ => None,
-        }
-    }
-
-    /// Check if tick has complete bid/ask data
-    pub fn is_complete(&self) -> bool {
-        self.bid_price.is_some() && self.ask_price.is_some()
-    }
-}
+use crate::ctrader_fix::{parse_fix_field, MarketTick};
 
 /// Market data entry parsed from FIX message
 /// This represents a single entry in the NoMDEntries repeating group
@@ -83,7 +17,6 @@ pub struct MarketDataEntry {
 pub enum MDEntryType {
     Bid = 0,
     Offer = 1,
-    Trade = 2,
 }
 
 impl MDEntryType {
@@ -91,7 +24,6 @@ impl MDEntryType {
         match c {
             '0' => Some(Self::Bid),
             '1' => Some(Self::Offer),
-            '2' => Some(Self::Trade),
             _ => None,
         }
     }
@@ -144,6 +76,8 @@ impl EntryBuilder {
     }
 }
 
+
+
 /// Optimized FIX message parser for market data
 /// Uses zero-copy parsing where possible to minimize allocations
 pub struct MarketDataParser {
@@ -157,16 +91,6 @@ impl MarketDataParser {
         Self {
             buffer: Vec::with_capacity(4096),
         }
-    }
-
-    /// Parse a single FIX field in the format "tag=value"
-    /// Returns Some((tag, value)) if valid, None otherwise
-    fn parse_fix_field(field: &str) -> Option<(u32, &str)> {
-        // split_once splits the string at the first occurrence of '='
-        // and_then will run the closure if the || equals to Some(T), if it is None, then skip the closure and return none
-        field.split_once('=').and_then(|(tag_str, value)| {
-            tag_str.parse::<u32>().ok().map(|tag| (tag, value))
-        })
     }
 
     /// Handle a single FIX field and update parser state accordingly
@@ -212,12 +136,12 @@ impl MarketDataParser {
     /// 4. Finalizing any incomplete entry at the end
     pub fn parse_market_data(&self, raw_message: &str) -> Option<(String, Vec<MarketDataEntry>)> {
         let mut symbol_id = None;
-        let mut entries = Vec::with_capacity(4); // Pre-allocate for typical 2-4 entries
+        let mut entries = vec![]; 
         let mut builder = EntryBuilder::new();
 
         // Parse each field in the FIX message
         for field in raw_message.split('\x01') {
-            if let Some((tag, value)) = Self::parse_fix_field(field) {
+            if let Some((tag, value)) = parse_fix_field(field) {
                 Self::handle_field(tag, value, &mut symbol_id, &mut builder, &mut entries);
             }
         }
@@ -241,10 +165,6 @@ impl MarketDataParser {
                 }
                 MDEntryType::Offer => {
                     tick.ask_price = Some(entry.price);
-                }
-                MDEntryType::Trade => {
-                    // For trades, we might want to update both bid and ask
-                    // or handle differently depending on use case
                 }
             }
         }
