@@ -431,7 +431,7 @@ impl CTraderFixClient {
         // Still build and send tick for other consumers if needed
         if let Some(ref tx) = self.tick_sender {
             if let Some((symbol_id, entries)) = self.parser.parse_market_data(raw_message) {
-                let tick = self.parser.build_tick(symbol_id, entries);
+                let tick = self.parser.build_tick(symbol_id.clone(), entries);
                 let _ = tx.send(tick);
             }
         }

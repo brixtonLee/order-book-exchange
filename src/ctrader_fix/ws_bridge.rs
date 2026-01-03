@@ -1,48 +1,58 @@
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 use crate::websocket::{broadcaster::Broadcaster, messages::WsMessage};
 use super::market_data::MarketTick;
 use chrono::Utc;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Bridge that converts FIX market ticks to WebSocket messages
 /// This allows real-time streaming from cTrader FIX API to WebSocket clients
 pub struct FixToWebSocketBridge {
     broadcaster: Broadcaster,
     /// Symbol ID mapping (cTrader ID -> human readable symbol)
-    symbol_map: std::collections::HashMap<String, String>,
+    /// Uses Arc<RwLock> for thread-safe dynamic updates
+    symbol_map: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl FixToWebSocketBridge {
     pub fn new(broadcaster: Broadcaster) -> Self {
-        let mut symbol_map = std::collections::HashMap::new();
-
-        // Common cTrader symbol mappings
-        symbol_map.insert("41".to_string(), "XAUUSD".to_string()); // Gold
-        symbol_map.insert("1".to_string(), "EURUSD".to_string());
-        symbol_map.insert("2".to_string(), "GBPUSD".to_string());
-        symbol_map.insert("3".to_string(), "USDJPY".to_string());
-
         Self {
             broadcaster,
-            symbol_map,
+            symbol_map: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
+    /// Get a clone of the symbol map Arc for sharing with callbacks
+    pub fn get_symbol_map(&self) -> Arc<RwLock<HashMap<String, String>>> {
+        Arc::clone(&self.symbol_map)
+    }
+
     /// Add a custom symbol mapping
-    pub fn add_symbol_mapping(&mut self, symbol_id: String, symbol_name: String) {
-        self.symbol_map.insert(symbol_id, symbol_name);
+    pub async fn add_symbol_mapping(&self, symbol_id: String, symbol_name: String) {
+        let mut map = self.symbol_map.write().await;
+        map.insert(symbol_id, symbol_name);
+    }
+
+    /// Bulk update symbol mappings (useful for Security List Response)
+    pub async fn update_symbol_mappings(&self, mappings: HashMap<String, String>) {
+        let mut map = self.symbol_map.write().await;
+        for (id, name) in mappings {
+            map.insert(id, name);
+        }
     }
 
     /// Get human-readable symbol name
-    fn get_symbol_name(&self, symbol_id: &str) -> String {
-        self.symbol_map
-            .get(symbol_id)
+    async fn get_symbol_name(&self, symbol_id: &str) -> String {
+        let map = self.symbol_map.read().await;
+        map.get(symbol_id)
             .cloned()
             .unwrap_or_else(|| format!("SYM_{}", symbol_id))
     }
 
     /// Convert MarketTick to Ticker WsMessage
-    fn tick_to_ws_message(&self, tick: &MarketTick) -> WsMessage {
-        let symbol = self.get_symbol_name(&tick.symbol_id);
+    async fn tick_to_ws_message(&self, tick: &MarketTick) -> WsMessage {
+        let symbol = self.get_symbol_name(&tick.symbol_id).await;
 
         WsMessage::Ticker {
             symbol,
@@ -55,9 +65,9 @@ impl FixToWebSocketBridge {
     }
 
     /// Process a single tick and broadcast to WebSocket
-    pub fn process_tick(&self, tick: MarketTick) {
-        let symbol = self.get_symbol_name(&tick.symbol_id);
-        let ws_message = self.tick_to_ws_message(&tick);
+    pub async fn process_tick(&self, tick: MarketTick) {
+        let symbol = self.get_symbol_name(&tick.symbol_id).await;
+        let ws_message = self.tick_to_ws_message(&tick).await;
 
         // Broadcast to ticker channel
         let topic = format!("ticker:{}", symbol);
@@ -73,7 +83,7 @@ impl FixToWebSocketBridge {
         println!("   Broadcasting ticks to WebSocket clients...\n");
 
         while let Some(tick) = tick_receiver.recv().await {
-            self.process_tick(tick);
+            self.process_tick(tick).await;
         }
 
         println!("🔴 FIX to WebSocket bridge stopped");
@@ -119,14 +129,14 @@ impl Default for MarketDataStats {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_symbol_mapping() {
+    #[tokio::test]
+    async fn test_symbol_mapping() {
         let broadcaster = Broadcaster::new();
         let bridge = FixToWebSocketBridge::new(broadcaster);
 
-        assert_eq!(bridge.get_symbol_name("41"), "XAUUSD");
-        assert_eq!(bridge.get_symbol_name("1"), "EURUSD");
-        assert_eq!(bridge.get_symbol_name("999"), "SYM_999");
+        assert_eq!(bridge.get_symbol_name("41").await, "XAUUSD");
+        assert_eq!(bridge.get_symbol_name("1").await, "EURUSD");
+        assert_eq!(bridge.get_symbol_name("999").await, "SYM_999");
     }
 
     #[tokio::test]
@@ -141,7 +151,7 @@ mod tests {
         tick.bid_price = Some(Decimal::from_str("2650.50").unwrap());
         tick.ask_price = Some(Decimal::from_str("2651.00").unwrap());
 
-        bridge.process_tick(tick);
+        bridge.process_tick(tick).await;
 
         // Verify message was broadcast
         assert!(broadcaster.subscriber_count("ticker:XAUUSD") == 0); // No subscribers yet, but broadcast succeeded

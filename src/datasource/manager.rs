@@ -80,6 +80,9 @@ impl DatasourceManager {
             config.credentials.password.clone(),
         );
 
+        // Create bridge to convert FIX ticks to WebSocket messages (before setting callbacks)
+        let bridge = FixToWebSocketBridge::new(self.broadcaster.clone());
+
         // Arc::clone() creates a new reference-counted pointer to the same heap-allocated data. It's a cheap operation that only increments the reference count, rather than copying the actual data.
         // Set up heartbeat callback
         let heartbeat_counter = Arc::clone(&self.heartbeat_counter);
@@ -97,6 +100,7 @@ impl DatasourceManager {
         // Set up security list callback
         let subscribed_symbols = Arc::clone(&self.subscribed_symbols);
         let symbol_mapping = Arc::clone(&self.symbol_mapping);
+
         client.set_security_list_callback(Arc::new(move |symbols: Vec<SymbolData>| {
             tracing::info!("Received {} symbols from Security List Response", symbols.len());
 
@@ -111,12 +115,9 @@ impl DatasourceManager {
                 *syms = symbols;
             }
             if let Ok(mut map) = symbol_mapping.try_write() {
-                *map = mapping;
+                *map = mapping.clone();
             }
         }));
-
-        // Create bridge to convert FIX ticks to WebSocket messages
-        let bridge = FixToWebSocketBridge::new(self.broadcaster.clone());
 
         // Spawn FIX client task
         let client_handle = tokio::spawn(async move {
