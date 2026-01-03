@@ -1,10 +1,11 @@
 use crate::ctrader_fix::{CTraderFixClient, FixToWebSocketBridge};
+use crate::ctrader_fix::market_data::MarketTick;
 use crate::models::datasource::*;
 use crate::websocket::broadcaster::Broadcaster;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 
 // JoinHandle is a Rust type from std::thread and tokio::task modules that represents a handle to a spawned thread or async task.
 // It allows you to:
@@ -51,24 +52,12 @@ impl DatasourceManager {
 
     /// Start FIX connection with given configuration
     pub async fn start_live_fix(&self, config: FixConfig) -> Result<(), String> {
-        // Check if already connected
-        let current_mode = *self.mode.read().await;
-        if current_mode == DatasourceMode::Connected {
-            return Err("Already connected to FIX server".to_string());
-        }
+        self.validate_connection_state().await?;
 
         tracing::info!("Starting FIX connection to {}:{}", config.host, config.port);
 
-        // Store configuration
-        *self.fix_config.write().await = Some(config.clone());
+        self.reset_connection_state(&config).await;
 
-        // Reset metrics
-        self.heartbeat_counter.store(0, Ordering::Relaxed);
-        *self.connection_metrics.write().await = Some(ConnectionMetrics::new());
-        *self.subscribed_symbols.write().await = Vec::new();
-        *self.symbol_mapping.write().await = HashMap::new();
-
-        // Create FIX client with tick channel
         let (mut client, tick_receiver) = CTraderFixClient::with_tick_channel(
             config.host.clone(),
             config.port,
@@ -79,14 +68,47 @@ impl DatasourceManager {
             config.credentials.username.clone(),
             config.credentials.password.clone(),
         );
-
-        // Create bridge to convert FIX ticks to WebSocket messages (before setting callbacks)
         let bridge = FixToWebSocketBridge::new(self.broadcaster.clone());
 
-        // Arc::clone() creates a new reference-counted pointer to the same heap-allocated data. It's a cheap operation that only increments the reference count, rather than copying the actual data.
-        // Set up heartbeat callback
+        self.setup_fix_callbacks(&mut client, &bridge);
+
+        let (client_handle, bridge_handle) = self.spawn_connection_tasks(client, bridge, tick_receiver);
+
+        self.finalize_connection(client_handle, bridge_handle).await;
+
+        tracing::info!("FIX connection started successfully");
+        Ok(())
+    }
+
+    /// Validate that we're not already connected
+    async fn validate_connection_state(&self) -> Result<(), String> {
+        let current_mode = *self.mode.read().await;
+        if current_mode == DatasourceMode::Connected {
+            return Err("Already connected to FIX server".to_string());
+        }
+        Ok(())
+    }
+
+    /// Reset connection state and store new configuration
+    async fn reset_connection_state(&self, config: &FixConfig) {
+        *self.fix_config.write().await = Some(config.clone());
+        self.heartbeat_counter.store(0, Ordering::Relaxed);
+        *self.connection_metrics.write().await = Some(ConnectionMetrics::new());
+        *self.subscribed_symbols.write().await = Vec::new();
+        *self.symbol_mapping.write().await = HashMap::new();
+    }
+
+    /// Setup FIX client callbacks (heartbeat and security list)
+    fn setup_fix_callbacks(&self, client: &mut CTraderFixClient, bridge: &FixToWebSocketBridge) {
+        self.setup_heartbeat_callback(client);
+        self.setup_security_list_callback(client, bridge);
+    }
+
+    /// Setup heartbeat callback to track connection health
+    fn setup_heartbeat_callback(&self, client: &mut CTraderFixClient) {
         let heartbeat_counter = Arc::clone(&self.heartbeat_counter);
         let connection_metrics = Arc::clone(&self.connection_metrics);
+
         client.set_heartbeat_callback(Arc::new(move || {
             heartbeat_counter.fetch_add(1, Ordering::Relaxed);
             if let Ok(mut metrics) = connection_metrics.try_write() {
@@ -96,50 +118,93 @@ impl DatasourceManager {
             }
             tracing::debug!("Heartbeat received from FIX server");
         }));
+    }
 
-        // Set up security list callback
+    /// Setup security list callback to populate symbol mappings
+    fn setup_security_list_callback(&self, client: &mut CTraderFixClient, bridge: &FixToWebSocketBridge) {
         let subscribed_symbols = Arc::clone(&self.subscribed_symbols);
         let symbol_mapping = Arc::clone(&self.symbol_mapping);
+        let bridge_symbol_map = bridge.get_symbol_map();
 
         client.set_security_list_callback(Arc::new(move |symbols: Vec<SymbolData>| {
             tracing::info!("Received {} symbols from Security List Response", symbols.len());
 
-            // Build symbol mapping (ID -> Name)
-            let mut mapping = HashMap::new();
-            for symbol in &symbols {
-                mapping.insert(symbol.symbol_id.to_string(), symbol.symbol_name.clone());
-            }
+            let mapping = Self::build_symbol_mapping(&symbols);
 
-            // Update shared state
-            if let Ok(mut syms) = subscribed_symbols.try_write() {
-                *syms = symbols;
-            }
-            if let Ok(mut map) = symbol_mapping.try_write() {
-                *map = mapping.clone();
-            }
+            Self::update_subscribed_symbols(&subscribed_symbols, symbols);
+            Self::update_symbol_mapping(&symbol_mapping, mapping.clone());
+            Self::update_bridge_symbol_mapping(&bridge_symbol_map, mapping);
         }));
+    }
 
-        // Spawn FIX client task
+    /// Build HashMap of symbol ID -> symbol name
+    fn build_symbol_mapping(symbols: &[SymbolData]) -> HashMap<String, String> {
+        symbols
+            .iter()
+            .map(|symbol| (symbol.symbol_id.to_string(), symbol.symbol_name.clone()))
+            .collect()
+    }
+
+    /// Update subscribed symbols list
+    fn update_subscribed_symbols(
+        subscribed_symbols: &Arc<RwLock<Vec<SymbolData>>>,
+        symbols: Vec<SymbolData>,
+    ) {
+        if let Ok(mut syms) = subscribed_symbols.try_write() {
+            *syms = symbols;
+        }
+    }
+
+    /// Update symbol mapping (ID -> Name)
+    fn update_symbol_mapping(
+        symbol_mapping: &Arc<RwLock<HashMap<String, String>>>,
+        mapping: HashMap<String, String>,
+    ) {
+        if let Ok(mut map) = symbol_mapping.try_write() {
+            *map = mapping;
+        }
+    }
+
+    /// Update bridge symbol mapping asynchronously
+    fn update_bridge_symbol_mapping(
+        bridge_symbol_map: &Arc<RwLock<HashMap<String, String>>>,
+        mapping: HashMap<String, String>,
+    ) {
+        let bridge_map = Arc::clone(bridge_symbol_map);
+        tokio::spawn(async move {
+            let mut bridge_map = bridge_map.write().await;
+            for (id, name) in mapping {
+                bridge_map.insert(id, name);
+            }
+            tracing::info!("Updated bridge symbol mappings");
+        });
+    }
+
+    /// Spawn FIX client and bridge tasks
+    fn spawn_connection_tasks(
+        &self,
+        mut client: CTraderFixClient,
+        bridge: FixToWebSocketBridge,
+        tick_receiver: mpsc::UnboundedReceiver<MarketTick>,
+    ) -> (JoinHandle<()>, JoinHandle<()>) {
         let client_handle = tokio::spawn(async move {
             if let Err(e) = client.connect_and_run().await {
                 tracing::error!("FIX client error: {}", e);
             }
         });
 
-        // Spawn bridge task
         let bridge_handle = tokio::spawn(async move {
             bridge.run(tick_receiver).await;
         });
 
-        // Store task handles
+        (client_handle, bridge_handle)
+    }
+
+    /// Store task handles and update connection mode
+    async fn finalize_connection(&self, client_handle: JoinHandle<()>, bridge_handle: JoinHandle<()>) {
         *self.fix_client_handle.write().await = Some(client_handle);
         *self.bridge_handle.write().await = Some(bridge_handle);
-
-        // Update mode
         *self.mode.write().await = DatasourceMode::Connected;
-
-        tracing::info!("FIX connection started successfully");
-        Ok(())
     }
 
     /// Stop FIX connection
