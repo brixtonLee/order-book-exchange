@@ -2,11 +2,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::time::{interval, Duration};
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Instant;
+use std::sync::{Arc};
 use tokio::sync::{Mutex, mpsc};
-
-use super::messages::{create_logon_message, create_market_data_request, create_heartbeat, create_security_list_request, parse_security_list_response, parse_fix_message, format_for_display, SymbolData};
+use crate::ctrader_fix::symbol_data::parse_security_list_response;
+use crate::ctrader_fix::symbol_data::symbol_parser::SymbolData;
+use super::messages::{create_logon_message, create_market_data_request, create_heartbeat, create_security_list_request, parse_fix_message, format_for_display};
 use super::market_data::{MarketTick, MarketDataParser};
 
 /// Lightweight message for async display
@@ -21,7 +21,7 @@ struct DisplayMessage {
     entry_type: String,
     /// MD Entry Price (Tag 270)
     entry_price: String,
-    /// Time elapsed since last message (ms)
+    /// The amount of time has elapsed from the last message (ms)
     elapsed_ms: i64,
 }
 
@@ -39,8 +39,6 @@ pub struct CTraderFixClient {
     tick_sender: Option<mpsc::UnboundedSender<MarketTick>>,
     /// Parser for market data messages
     parser: MarketDataParser,
-    /// Timestamp of last received message (for latency tracking)
-    last_message_time: Arc<StdMutex<Option<Instant>>>,
     /// Channel for async display (non-blocking)
     display_sender: Option<mpsc::UnboundedSender<DisplayMessage>>,
     /// Callback invoked when heartbeat is received
@@ -72,14 +70,13 @@ impl CTraderFixClient {
             msg_seq_num: Arc::new(Mutex::new(1)),
             tick_sender: None,
             parser: MarketDataParser::new(),
-            last_message_time: Arc::new(StdMutex::new(None)),
             display_sender: None,
             heartbeat_callback: None,
             security_list_callback: None,
         }
     }
 
-    /// Create a new client with tick streaming channel
+    /// Create a new client with a tick streaming channel
     pub fn with_tick_channel(
         host: String,
         port: u16,
@@ -104,7 +101,6 @@ impl CTraderFixClient {
             msg_seq_num: Arc::new(Mutex::new(1)),
             tick_sender: Some(tx),
             parser: MarketDataParser::new(),
-            last_message_time: Arc::new(StdMutex::new(None)),
             display_sender: None,
             heartbeat_callback: None,
             security_list_callback: None,
@@ -134,7 +130,7 @@ impl CTraderFixClient {
         let stream = TcpStream::connect(format!("{}:{}", self.host, self.port)).await?;
         println!("✅ TCP connection established!");
 
-        // Spawn async display task for non-blocking output
+        // Spawn an async display task for non-blocking output
         let (display_tx, mut display_rx) = mpsc::unbounded_channel::<DisplayMessage>();
         tokio::spawn(async move {
             println!("📺 Display task started (async, non-blocking)\n");
@@ -158,7 +154,7 @@ impl CTraderFixClient {
         // Wrap writer in Arc<Mutex> for sharing across tasks
         let writer = Arc::new(Mutex::new(writer));
 
-        // Send Logon message
+        // Send a Logon message
         println!("\n📤 Sending Logon message...");
         let logon_msg = create_logon_message(
             &self.sender_comp_id,
@@ -184,7 +180,7 @@ impl CTraderFixClient {
 
         println!("✅ Logon message sent!");
 
-        // Spawn heartbeat task with shared writer
+        // Spawn heartbeat task with a shared writer
         let sender_comp_id = self.sender_comp_id.clone();
         let target_comp_id = self.target_comp_id.clone();
         let sender_sub_id = self.sender_sub_id.clone();
@@ -249,7 +245,7 @@ impl CTraderFixClient {
     }
 
     fn extract_message(&self, buffer: &mut Vec<u8>) -> Option<String> {
-        // Look for complete FIX message (starts with "8=FIX" and ends with checksum)
+        // Look for a complete FIX message (starts with "8=FIX" and ends with checksum)
         // This is a simplified implementation
         if let Ok(s) = String::from_utf8(buffer.clone()) {
             if s.contains("10=") && s.contains("\x01") {
@@ -274,7 +270,7 @@ impl CTraderFixClient {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let fields = parse_fix_message(raw_message);
 
-        // Get message type
+        // Get a message type
         let msg_type = fields.get(&35).map(|s| s.as_str()).unwrap_or("Unknown");
 
         // Verbose message display removed for performance
@@ -355,18 +351,10 @@ impl CTraderFixClient {
     }
 
     fn display_security_list_header(request_id: &str, result_code: u32, symbol_data: &[SymbolData]){
-        println!("║ 📋 SECURITY LIST RESPONSE                                    ║");
-        println!("║ Request ID: {:<50}║", request_id);
-        println!("║ Result: {:<54}║", Self::format_security_result_code(result_code));
-        println!("║ Total Symbols: {:<47}║", symbol_data.len());
-        println!("╠══════════════════════════════════════════════════════════════╣");
-
-        if !symbol_data.is_empty() {
-            Self::display_symbol_data(symbol_data);
-        }
-
-        println!("╚══════════════════════════════════════════════════════════════╝");
-        println!();
+        println!("📋 SECURITY LIST RESPONSE");
+        println!("Request ID: {}", request_id);
+        println!("Result: {}", Self::format_security_result_code(result_code));
+        println!("Total Symbols: {}", symbol_data.len());
     }
 
     fn format_security_result_code(result_code: u32) -> &'static str {
@@ -380,24 +368,6 @@ impl CTraderFixClient {
             _ => "❓ Unknown result",
         }
     }
-
-    fn display_symbol_data(symbol_data: &[SymbolData]){
-        println!("║ Available Symbols:                                           ║");
-        println!("║ {:<4} {:<20} {:<6}                           ║", "ID", "Name", "Digits");
-        println!("╠══════════════════════════════════════════════════════════════╣");
-
-        let display_count = symbol_data.len().min(20);
-        for symbol_data in symbol_data.iter().take(display_count) {
-            println!("║ {:<4} {:<20} {:<6}                           ║", symbol_data.symbol_id, symbol_data.symbol_name, symbol_data.symbol_digits);
-        }
-
-        if symbol_data.len() > 20 {
-            println!("║ ... and {} more symbols                                   ║", symbol_data.len() - 20);
-        }
-    }
-
-
-
 
     /// Handle Security List Response (MsgType=y)
     /// Parses and displays the list of available trading symbols
@@ -417,8 +387,6 @@ impl CTraderFixClient {
 
             // Send Market Data Request using received symbols
             if !symbols.is_empty() && result == 0 {
-                println!("📊 Sending Market Data Request for symbols...\n");
-
                 let seq = {
                     let mut s = self.msg_seq_num.lock().await;
                     let current = *s;
@@ -426,15 +394,15 @@ impl CTraderFixClient {
                     current
                 };
 
-                // Request market data for first few symbols (limit to avoid overwhelming)
                 let symbol_ids: Vec<String> = symbols
                     .iter()
                     .map(|symbol_data| {
-                        println!("  ✓ Subscribing to: {} (ID: {})", symbol_data.symbol_name, symbol_data.symbol_id);
                         symbol_data.symbol_id.to_string()
                     })
                     .collect();
 
+                println!("  ✓ Subscribing to {} symbols", symbol_ids.len());
+                
                 let symbol_id_refs: Vec<&str> = symbol_ids.iter().map(|s| s.as_str()).collect();
 
                 let md_request = create_market_data_request(
@@ -446,7 +414,6 @@ impl CTraderFixClient {
                     &symbol_id_refs,
                 );
 
-                println!("\n📤 Market Data Request: {}", format_for_display(&md_request));
                 let mut w = writer.lock().await;
                 w.write_all(md_request.as_bytes()).await?;
                 w.flush().await?;
@@ -459,43 +426,8 @@ impl CTraderFixClient {
     }
 
     /// Process market data - lightweight extraction and async display
-    /// Non-blocking: sends to display channel instead of printing directly
+    /// Non-blocking: sends to display a channel instead of printing directly
     fn process_market_data(&self, raw_message: &str) {
-        // Capture current time immediately for latency tracking
-        let current_time = Instant::now();
-
-        // Calculate elapsed time since last message
-        let elapsed_ms = {
-            let mut last_time = self.last_message_time.lock().unwrap();
-
-            // Calculate elapsed using Option::map for clean code
-            let elapsed = last_time
-                .map(|prev| prev.elapsed().as_millis() as i64)
-                .unwrap_or(0);
-
-            // Update last message time for next calculation
-            *last_time = Some(current_time);
-
-            elapsed
-        }; // Mutex lock is dropped here
-
-        // Lightweight field extraction (no heavy tick building)
-        let fields = parse_fix_message(raw_message);
-
-        // Extract only the 4 essential fields
-        // let display_msg = DisplayMessage {
-        //     symbol: fields.get(&55).cloned().unwrap_or_else(|| "N/A".to_string()),
-        //     num_entries: fields.get(&268).cloned().unwrap_or_else(|| "N/A".to_string()),
-        //     entry_type: fields.get(&269).cloned().unwrap_or_else(|| "N/A".to_string()),
-        //     entry_price: fields.get(&270).cloned().unwrap_or_else(|| "N/A".to_string()),
-        //     elapsed_ms,
-        // };
-
-        // // Send to async display task (non-blocking!)
-        // if let Some(ref tx) = self.display_sender {
-        //     let _ = tx.send(display_msg);
-        // }
-
         // Still build and send tick for other consumers if needed
         if let Some(ref tx) = self.tick_sender {
             if let Some((symbol_id, entries)) = self.parser.parse_market_data(raw_message) {
