@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use super::iceberg::IcebergConfig;
+
 /// Represents a trading order in the order book
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Order {
@@ -29,6 +31,9 @@ pub struct Order {
     /// Expiration time for GTD orders
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expire_time: Option<DateTime<Utc>>,
+    /// Iceberg configuration (None for regular orders)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iceberg: Option<IcebergConfig>,
 }
 
 /// Order side: Buy or Sell
@@ -148,12 +153,41 @@ impl Order {
             stp_mode,
             post_only,
             expire_time,
+            iceberg: None,
         }
     }
 
     /// Get the remaining unfilled quantity
     pub fn remaining_quantity(&self) -> Decimal {
         self.quantity - self.filled_quantity
+    }
+
+    /// Get the quantity visible in the order book
+    pub fn visible_quantity(&self) -> Decimal {
+        match &self.iceberg {
+            Some(config) => config.visible_quantity(),
+            None => self.remaining_quantity(),
+        }
+    }
+
+    /// Process a fill, handling iceberg replenishment
+    /// Returns true if the order was replenished (timestamp should be updated)
+    pub fn apply_fill(&mut self, fill_qty: Decimal) -> bool {
+        self.filled_quantity += fill_qty;
+
+        if let Some(ref mut iceberg) = self.iceberg {
+            let result = iceberg.process_fill(fill_qty);
+
+            if result.replenished {
+                // IMPORTANT: Update timestamp - order loses time priority!
+                self.timestamp = Utc::now();
+                self.update_status();
+                return true; // Signal that order was modified
+            }
+        }
+
+        self.update_status();
+        false
     }
 
     /// Check if the order is fully filled
