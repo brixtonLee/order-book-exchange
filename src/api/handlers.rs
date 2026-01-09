@@ -10,7 +10,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::engine::{OrderBookEngine, OrderBookError};
-use crate::metrics::calculate_spread_metrics;
+use crate::metrics::{calculate_spread_metrics, MicrostructureMetrics};
 use crate::models::Order;
 
 use super::responses::*;
@@ -315,4 +315,32 @@ pub async fn get_exchange_metrics(State(engine): State<AppState>) -> Json<Exchan
     };
 
     Json(response)
+}
+
+/// Get order book microstructure metrics
+#[utoipa::path(
+    get,
+    path = "/api/v1/orderbook/{symbol}/microstructure",
+    tag = "Metrics",
+    params(
+        ("symbol" = String, Path, description = "Trading symbol (e.g., AAPL)"),
+        ("depth" = Option<usize>, Query, description = "Number of price levels to analyze (default: 5)")
+    ),
+    responses(
+        (status = 200, description = "Microstructure metrics", body = MicrostructureMetrics)
+    )
+)]
+pub async fn get_microstructure_metrics(
+    State(engine): State<AppState>,
+    Path(symbol): Path<String>,
+    Query(params): Query<DepthQuery>,
+) -> Result<Json<MicrostructureMetrics>, StatusCode> {
+    let book = engine.get_order_book(&symbol);
+
+    let depth = if params.depth == default_depth() { 5 } else { params.depth };
+
+    match MicrostructureMetrics::from_order_book(&book, depth) {
+        Some(metrics) => Ok(Json(metrics)),
+        None => Err(StatusCode::NOT_FOUND),
+    }
 }

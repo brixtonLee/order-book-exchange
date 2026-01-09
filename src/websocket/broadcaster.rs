@@ -53,24 +53,12 @@ impl Broadcaster {
         }
     }
 
-    /// Broadcast to multiple topics
-    pub fn broadcast_multi(&self, topics: &[String], message: WsMessage) {
-        for topic in topics {
-            self.broadcast(topic, message.clone());
-        }
-    }
-
     /// Get subscriber count for a topic
     pub fn subscriber_count(&self, topic: &str) -> usize {
         self.channels
             .get(topic)
             .map(|sender| sender.receiver_count())
             .unwrap_or(0)
-    }
-
-    /// Remove a channel if it has no subscribers
-    pub fn cleanup_empty_channels(&self) {
-        self.channels.retain(|_, sender| sender.receiver_count() > 0);
     }
 }
 

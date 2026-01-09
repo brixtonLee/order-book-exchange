@@ -3,7 +3,7 @@ use utoipa::OpenApi;
 use crate::api::handlers;
 use crate::api::datasource_handlers;
 use crate::api::responses::*;
-use crate::metrics::SpreadMetrics;
+use crate::metrics::{SpreadMetrics, MicrostructureMetrics, TradingSignal};
 use crate::models::{Order, OrderSide, OrderStatus, OrderType};
 use crate::models::datasource::*;
 
@@ -31,6 +31,7 @@ use crate::models::datasource::*;
         handlers::get_spread_metrics,
         handlers::get_trades,
         handlers::get_exchange_metrics,
+        handlers::get_microstructure_metrics,
     ),
     components(
         schemas(
@@ -49,6 +50,8 @@ use crate::models::datasource::*;
             TradeListResponse,
             ExchangeMetricsResponse,
             ErrorResponse,
+            MicrostructureMetrics,
+            TradingSignal,
         )
     ),
     tags(
@@ -85,6 +88,7 @@ pub struct ApiDocV1;
         handlers::get_spread_metrics,
         handlers::get_trades,
         handlers::get_exchange_metrics,
+        handlers::get_microstructure_metrics,
         // Datasource control endpoints
         datasource_handlers::start_datasource,
         datasource_handlers::stop_datasource,
@@ -121,6 +125,8 @@ pub struct ApiDocV1;
             ConnectionState,
             HeartbeatState,
             FixCredentials,
+            MicrostructureMetrics,
+            TradingSignal,
         )
     ),
     tags(

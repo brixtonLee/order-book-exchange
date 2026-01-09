@@ -65,6 +65,7 @@ pub fn create_router(
         .route("/api/v1/trades/:symbol", get(get_trades))
         // Metrics endpoints
         .route("/api/v1/metrics/exchange", get(get_exchange_metrics))
+        .route("/api/v1/orderbook/:symbol/microstructure", get(get_microstructure_metrics))
         // Add state for REST endpoints
         .with_state(engine)
 }

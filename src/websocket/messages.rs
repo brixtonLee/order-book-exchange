@@ -70,6 +70,8 @@ pub struct PriceLevel {
 }
 
 /// Client subscription request
+/// action inside the json string is the discriminator and the variant name becomes the value of this "action" field
+/// Meaning value of action should be "Subscribe", "Unsubscribe" and "Ping"
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ClientMessage {
