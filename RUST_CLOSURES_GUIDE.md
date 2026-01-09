@@ -1593,6 +1593,955 @@ fn main() {
 
 ---
 
+## Understanding Capture Modes in Closure Chains
+
+### How to Know What's Being Captured
+
+When working with closure chains, understanding what gets borrowed, mutably borrowed, or moved is crucial for avoiding compiler errors and writing efficient code.
+
+#### Visual Guide to Iterator Methods and Borrowing
+
+```rust
+fn main() {
+    let data = vec![1, 2, 3, 4, 5];
+
+    // .iter() → borrows &T
+    data.iter()        // Iterator<Item = &i32>
+        .map(|&x| x)   // x is i32 (destructured from &i32)
+        .collect::<Vec<i32>>();
+
+    // .iter_mut() → borrows &mut T
+    let mut data_mut = vec![1, 2, 3];
+    data_mut.iter_mut()     // Iterator<Item = &mut i32>
+        .for_each(|x| *x *= 2); // x is &mut i32
+
+    // .into_iter() → takes ownership T
+    let data_owned = vec![1, 2, 3];
+    data_owned.into_iter()  // Iterator<Item = i32>
+        .map(|x| x * 2)     // x is i32 (owned)
+        .collect::<Vec<i32>>();
+    // data_owned is no longer accessible here
+}
+```
+
+#### Pattern Matching in Closures
+
+```rust
+fn main() {
+    let prices = vec![100.0, 150.0, 200.0];
+
+    // Different ways to handle references in closures
+
+    // Method 1: Pattern match to dereference
+    prices.iter()
+        .filter(|&&p| p > 150.0)  // &&f64 → f64
+        .for_each(|&p| println!("{}", p));
+
+    // Method 2: Explicit dereference
+    prices.iter()
+        .filter(|p| **p > 150.0)  // p is &&f64, **p is f64
+        .for_each(|p| println!("{}", *p));
+
+    // Method 3: Use reference in closure
+    prices.iter()
+        .filter(|p: &&f64| *p > &150.0)  // Compare references
+        .for_each(|p| println!("{}", p));
+
+    // Method 4: Use copied() adapter
+    prices.iter()
+        .copied()                  // Converts &T to T for Copy types
+        .filter(|&p| p > 150.0)
+        .for_each(|p| println!("{}", p));
+}
+```
+
+#### Rules for Determining Capture Mode
+
+```rust
+fn demonstrate_capture_rules() {
+    let immutable_data = vec![1, 2, 3];
+    let mut mutable_data = vec![4, 5, 6];
+    let expensive_data = vec![vec![1; 1000]; 100];
+
+    // Rule 1: Rust prefers borrowing (&T) if possible
+    let borrow_closure = || {
+        println!("{:?}", immutable_data);  // Borrows immutable_data
+    };
+    borrow_closure();
+    println!("{:?}", immutable_data);  // Still accessible
+
+    // Rule 2: Mutable borrow (&mut T) when mutation needed
+    let mut mutate_closure = || {
+        mutable_data.push(7);  // Mutably borrows mutable_data
+    };
+    mutate_closure();
+    // Can't use mutable_data here until mutate_closure is dropped
+
+    // Rule 3: Move (T) when explicitly requested or required
+    let move_closure = move || {
+        println!("{:?}", expensive_data);  // Moves expensive_data
+    };
+    move_closure();
+    // expensive_data is no longer accessible
+
+    // Rule 4: Move when closure outlives the value
+    fn return_closure() -> impl Fn() {
+        let local_value = 42;
+        move || println!("{}", local_value)  // Must move, not borrow
+    }
+}
+```
+
+#### Common Iterator Chain Patterns and Their Types
+
+```rust
+use std::collections::HashMap;
+
+fn iterator_chain_types() {
+    let orders = vec![
+        ("AAPL", 100, 150.0),
+        ("GOOGL", 50, 2800.0),
+        ("MSFT", 200, 300.0),
+    ];
+
+    // Chain 1: Reference throughout
+    let total: f64 = orders
+        .iter()                           // &(str, i32, f64)
+        .map(|(_, qty, price)| {          // Destructure reference
+            *qty as f64 * price           // Dereference as needed
+        })
+        .sum();
+
+    // Chain 2: Convert to owned with cloned()
+    let symbols: Vec<String> = orders
+        .iter()
+        .map(|(symbol, _, _)| symbol)    // symbol is &&str
+        .cloned()                         // &&str → &str
+        .map(|s| s.to_string())          // &str → String
+        .collect();
+
+    // Chain 3: Move ownership with into_iter()
+    let processed: Vec<(String, f64)> = orders
+        .into_iter()                     // Moves orders
+        .filter(|(_, qty, _)| *qty > 75)
+        .map(|(symbol, qty, price)| {
+            (symbol.to_string(), qty as f64 * price)
+        })
+        .collect();
+    // orders no longer accessible
+}
+```
+
+#### Debugging Capture Types
+
+```rust
+fn debug_capture_types() {
+    let data = vec![1, 2, 3];
+
+    // Trick 1: Use compiler errors to reveal types
+    let closure = || {
+        let _: () = data;  // Error will show the actual type
+        // error: expected `()`, found `Vec<i32>`
+    };
+
+    // Trick 2: Use std::mem::size_of_val to check closure size
+    let x = 42u8;
+    let y = vec![1, 2, 3];
+
+    let closure1 = || x;           // Captures u8 by value
+    let closure2 = || &y;          // Captures &Vec
+    let closure3 = move || y;      // Moves Vec
+
+    println!("Sizes: {} {} {}",
+        std::mem::size_of_val(&closure1),  // 1 byte
+        std::mem::size_of_val(&closure2),  // 8 bytes (pointer)
+        std::mem::size_of_val(&closure3)); // 24 bytes (Vec)
+}
+```
+
+#### Practical Examples: Order Book Processing
+
+```rust
+#[derive(Clone, Debug)]
+struct Order {
+    id: String,
+    symbol: String,
+    quantity: u32,
+    price: f64,
+}
+
+fn process_order_book() {
+    let orders = vec![
+        Order { id: "1".to_string(), symbol: "AAPL".to_string(), quantity: 100, price: 150.0 },
+        Order { id: "2".to_string(), symbol: "GOOGL".to_string(), quantity: 50, price: 2800.0 },
+    ];
+
+    // Example 1: Borrowing for read-only operations
+    let total_value: f64 = orders
+        .iter()  // Borrows orders
+        .map(|order| order.quantity as f64 * order.price)
+        .sum();
+
+    println!("Total value: {}", total_value);
+    println!("Orders still accessible: {:?}", orders);
+
+    // Example 2: Cloning when needed
+    let high_value_orders: Vec<Order> = orders
+        .iter()
+        .filter(|order| order.quantity as f64 * order.price > 10000.0)
+        .cloned()  // Clone the filtered orders
+        .collect();
+
+    // Example 3: Moving when transferring ownership
+    let symbols: Vec<String> = orders
+        .into_iter()  // Moves orders
+        .map(|order| order.symbol)  // Takes owned symbol
+        .collect();
+
+    // orders is no longer accessible
+    // println!("{:?}", orders);  // Error: value moved
+}
+```
+
+---
+
+## Advanced Closure Features
+
+### 1. Higher-Rank Trait Bounds (HRTBs) with Closures
+
+HRTBs allow you to accept closures that work with any lifetime, crucial for generic APIs.
+
+```rust
+// The for<'a> syntax - accepts closures with any lifetime
+fn apply_to_ref<F>(f: F) -> i32
+where
+    F: for<'a> Fn(&'a i32) -> i32,
+{
+    let x = 42;
+    f(&x)
+}
+
+// Practical: Processing borrowed data with flexible lifetimes
+fn process_orders<F>(orders: &[Order], processor: F)
+where
+    F: for<'a> Fn(&'a Order) -> bool,
+{
+    for order in orders {
+        if processor(order) {
+            println!("Processing order: {}", order.id);
+        }
+    }
+}
+
+// Generic callback that works with any lifetime
+fn with_buffer<F>(size: usize, callback: F)
+where
+    F: for<'r> FnOnce(&'r mut Vec<u8>),
+{
+    let mut buffer = vec![0u8; size];
+    callback(&mut buffer);
+}
+```
+
+### 2. Recursive Closures
+
+Closures can't directly reference themselves, but we can work around this.
+
+```rust
+use std::rc::Rc;
+use std::cell::RefCell;
+
+fn recursive_closures() {
+    // Method 1: Using Rc and RefCell
+    let factorial: Rc<RefCell<Option<Box<dyn Fn(u32) -> u32>>>> =
+        Rc::new(RefCell::new(None));
+
+    let factorial_clone = factorial.clone();
+    *factorial.borrow_mut() = Some(Box::new(move |n| {
+        if n <= 1 {
+            1
+        } else {
+            n * factorial_clone.borrow().as_ref().unwrap()(n - 1)
+        }
+    }));
+
+    println!("5! = {}", factorial.borrow().as_ref().unwrap()(5));
+
+    // Method 2: Using a helper function
+    fn fibonacci_helper(n: u32, cache: &mut Vec<u32>) -> u32 {
+        if n < cache.len() as u32 {
+            return cache[n as usize];
+        }
+
+        let result = fibonacci_helper(n - 1, cache) + fibonacci_helper(n - 2, cache);
+        cache.push(result);
+        result
+    }
+
+    let mut fib = |n: u32| -> u32 {
+        let mut cache = vec![0, 1];
+        fibonacci_helper(n, &mut cache)
+    };
+
+    println!("fib(10) = {}", fib(10));
+}
+```
+
+### 3. Async Closures
+
+Working with async/await in closures requires special handling.
+
+```rust
+use futures::future::BoxFuture;
+use std::future::Future;
+
+// Return type for async closures
+fn create_async_processor() -> impl Fn(String) -> BoxFuture<'static, Result<(), String>> {
+    |order_id| {
+        Box::pin(async move {
+            // Simulate async order processing
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            println!("Processed order: {}", order_id);
+            Ok(())
+        })
+    }
+}
+
+// Using async blocks in iterator chains
+async fn process_orders_async(order_ids: Vec<String>) {
+    let futures: Vec<_> = order_ids
+        .into_iter()
+        .map(|id| async move {
+            // Each creates a future
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            format!("Processed: {}", id)
+        })
+        .collect();
+
+    // Await all futures concurrently
+    let results = futures::future::join_all(futures).await;
+    for result in results {
+        println!("{}", result);
+    }
+}
+
+// Async closure with error handling
+async fn validate_orders<F, Fut>(orders: Vec<Order>, validator: F) -> Vec<Result<Order, String>>
+where
+    F: Fn(Order) -> Fut,
+    Fut: Future<Output = Result<Order, String>>,
+{
+    let futures: Vec<_> = orders.into_iter().map(validator).collect();
+    futures::future::join_all(futures).await
+}
+```
+
+### 4. Non-Capturing Closures as Function Pointers
+
+Non-capturing closures have zero size and can be converted to function pointers.
+
+```rust
+fn function_pointer_closures() {
+    // Non-capturing closure
+    let add_fee = |price: f64| price * 1.001;
+
+    // Can be converted to function pointer
+    let fn_ptr: fn(f64) -> f64 = add_fee;
+
+    // Zero-cost abstraction
+    println!("Closure size: {}", std::mem::size_of_val(&add_fee));  // 0
+    println!("Fn ptr size: {}", std::mem::size_of_val(&fn_ptr));    // 8
+
+    // Useful for C FFI
+    extern "C" fn callback(x: i32) -> i32 {
+        x * 2
+    }
+
+    // Array of function pointers
+    let operations: [fn(i32) -> i32; 3] = [
+        |x| x + 1,
+        |x| x * 2,
+        |x| x - 1,
+    ];
+
+    for (i, op) in operations.iter().enumerate() {
+        println!("Operation {}: {}", i, op(10));
+    }
+
+    // Practical: Strategy pattern with zero cost
+    enum TradingStrategy {
+        Conservative,
+        Aggressive,
+        Neutral,
+    }
+
+    fn get_fee_calculator(strategy: TradingStrategy) -> fn(f64) -> f64 {
+        match strategy {
+            TradingStrategy::Conservative => |price| price * 0.002,
+            TradingStrategy::Aggressive => |price| price * 0.001,
+            TradingStrategy::Neutral => |price| price * 0.0015,
+        }
+    }
+}
+```
+
+### 5. Clone Closures for Multi-threading
+
+Sharing closures across threads requires careful handling.
+
+```rust
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn multi_threaded_closures() {
+    // Shared state
+    let counter = Arc::new(Mutex::new(0));
+    let results = Arc::new(Mutex::new(Vec::new()));
+
+    // Closure factory for thread-safe closures
+    let make_processor = {
+        let counter = Arc::clone(&counter);
+        let results = Arc::clone(&results);
+
+        move || {
+            let counter = Arc::clone(&counter);
+            let results = Arc::clone(&results);
+
+            move |order_id: String| {
+                let mut count = counter.lock().unwrap();
+                *count += 1;
+                let order_num = *count;
+
+                results.lock().unwrap().push(format!("Order {}: {}", order_num, order_id));
+            }
+        }
+    };
+
+    let mut handles = vec![];
+
+    for i in 0..10 {
+        let processor = make_processor();
+        handles.push(thread::spawn(move || {
+            processor(format!("ORD-{:03}", i));
+        }));
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    println!("Processed {} orders", *counter.lock().unwrap());
+    for result in results.lock().unwrap().iter() {
+        println!("{}", result);
+    }
+}
+```
+
+### 6. Lifetime Interactions in Closures
+
+Understanding how closures interact with lifetimes is crucial for complex APIs.
+
+```rust
+// Closures that return references
+fn create_selector<'a, T>(data: &'a [T]) -> impl Fn(usize) -> Option<&'a T> {
+    move |index| data.get(index)
+}
+
+// Multiple lifetime parameters
+fn create_comparator<'a, 'b>() -> impl Fn(&'a str, &'b str) -> bool {
+    |a, b| a.len() > b.len()
+}
+
+// Practical: Order book with lifetime-aware closures
+struct OrderBook<'a> {
+    orders: Vec<&'a Order>,
+}
+
+impl<'a> OrderBook<'a> {
+    fn filter<F>(&self, predicate: F) -> Vec<&'a Order>
+    where
+        F: Fn(&&Order) -> bool,
+    {
+        self.orders.iter()
+            .copied()
+            .filter(predicate)
+            .collect()
+    }
+
+    fn map_to_values<F, T>(&self, mapper: F) -> Vec<T>
+    where
+        F: Fn(&'a Order) -> T,
+    {
+        self.orders.iter()
+            .map(|&order| mapper(order))
+            .collect()
+    }
+}
+```
+
+### 7. Double Reference Patterns (&&T)
+
+Understanding and working with double references in closures.
+
+```rust
+fn double_reference_patterns() {
+    let data = vec![100, 200, 300];
+
+    // Understanding &&T patterns
+    data.iter()
+        .filter(|&&x| x > 150)        // Pattern match &&i32 to i32
+        .map(|&x| x * 2)              // Pattern match &i32 to i32
+        .for_each(|x| println!("{}", x));
+
+    // Complex nested structures
+    let nested = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
+
+    let flattened: Vec<i32> = nested
+        .iter()                       // &Vec<i32>
+        .flat_map(|inner| inner.iter())  // &&i32
+        .map(|&&x| x)                 // i32
+        .collect();
+
+    // Pattern matching in tuples
+    let pairs = vec![("AAPL", 150.0), ("GOOGL", 2800.0)];
+
+    pairs.iter()
+        .map(|&(symbol, price)| (symbol, price * 1.01))  // Destructure &tuple
+        .for_each(|(s, p)| println!("{}: {:.2}", s, p));
+
+    // Using as_ref() to work with references
+    let options = vec![Some(100), None, Some(200)];
+
+    options.iter()
+        .filter_map(|opt| opt.as_ref())  // Option<&i32>
+        .map(|&x| x * 2)
+        .for_each(|x| println!("{}", x));
+}
+```
+
+### 8. Custom Iterator Adapters
+
+Creating your own iterator methods that accept closures.
+
+```rust
+trait IteratorExt: Iterator {
+    // Group consecutive elements by a key function
+    fn chunk_by_key<K, F>(self, key_fn: F) -> ChunkByKey<Self, F>
+    where
+        Self: Sized,
+        F: FnMut(&Self::Item) -> K,
+        K: PartialEq,
+    {
+        ChunkByKey {
+            iter: self,
+            key_fn,
+            current: None,
+        }
+    }
+
+    // Apply transformation with index
+    fn map_indexed<B, F>(self, f: F) -> MapIndexed<Self, F>
+    where
+        Self: Sized,
+        F: FnMut(usize, Self::Item) -> B,
+    {
+        MapIndexed {
+            iter: self,
+            f,
+            index: 0,
+        }
+    }
+}
+
+impl<I: Iterator> IteratorExt for I {}
+
+// Implementation structs
+struct ChunkByKey<I, F> {
+    iter: I,
+    key_fn: F,
+    current: Option<(I::Item, )>,
+}
+
+struct MapIndexed<I, F> {
+    iter: I,
+    f: F,
+    index: usize,
+}
+
+impl<I, F, B> Iterator for MapIndexed<I, F>
+where
+    I: Iterator,
+    F: FnMut(usize, I::Item) -> B,
+{
+    type Item = B;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|item| {
+            let index = self.index;
+            self.index += 1;
+            (self.f)(index, item)
+        })
+    }
+}
+
+// Usage
+fn use_custom_adapters() {
+    let data = vec![1, 2, 3, 4, 5];
+
+    let indexed: Vec<_> = data.iter()
+        .map_indexed(|i, &x| format!("{}:{}", i, x))
+        .collect();
+
+    println!("{:?}", indexed);  // ["0:1", "1:2", "2:3", "3:4", "4:5"]
+}
+```
+
+### 9. Closure Size and Memory Optimization
+
+Understanding and optimizing closure memory usage.
+
+```rust
+use std::mem;
+
+fn closure_size_optimization() {
+    let small_data = 42u8;
+    let medium_data = vec![1; 100];
+    let large_data = vec![vec![1; 1000]; 100];
+
+    // Measure closure sizes
+    let closure_small = || small_data;
+    let closure_medium = || medium_data.clone();
+    let closure_large = move || large_data.clone();
+
+    println!("Closure sizes:");
+    println!("  Small: {} bytes", mem::size_of_val(&closure_small));
+    println!("  Medium: {} bytes", mem::size_of_val(&closure_medium));
+    println!("  Large: {} bytes", mem::size_of_val(&closure_large));
+
+    // Optimization: Capture only what you need
+    let data = vec![1; 1000];
+    let len = data.len();
+
+    // Bad: Captures entire Vec
+    let bad_closure = move || {
+        println!("Length: {}", data.len());
+    };
+
+    // Good: Captures only length
+    let good_closure = move || {
+        println!("Length: {}", len);
+    };
+
+    println!("Bad closure: {} bytes", mem::size_of_val(&bad_closure));
+    println!("Good closure: {} bytes", mem::size_of_val(&good_closure));
+
+    // Practical: Order processing optimization
+    struct LargeOrder {
+        id: String,
+        data: Vec<u8>,  // Large payload
+    }
+
+    impl LargeOrder {
+        fn process_efficiently<F>(&self, processor: F)
+        where
+            F: FnOnce(&str),
+        {
+            // Only pass the ID, not the entire struct
+            processor(&self.id);
+        }
+    }
+}
+```
+
+### 10. Type Inference Limitations and Solutions
+
+Sometimes Rust can't infer types in closure chains.
+
+```rust
+fn type_inference_challenges() {
+    // Problem 1: Can't infer collection type
+    let numbers = vec!["1", "2", "3"];
+
+    // Won't compile - ambiguous collection type
+    // let parsed = numbers.iter().map(|s| s.parse().unwrap()).collect();
+
+    // Solution 1: Type annotation
+    let parsed: Vec<i32> = numbers.iter()
+        .map(|s| s.parse().unwrap())
+        .collect();
+
+    // Solution 2: Turbofish
+    let parsed = numbers.iter()
+        .map(|s| s.parse::<i32>().unwrap())
+        .collect::<Vec<_>>();
+
+    // Problem 2: Complex closure return types
+    let processor = |x: i32| {
+        if x > 0 {
+            Ok(x as f64)
+        } else {
+            Err("Negative value")
+        }
+    };
+
+    // Need to specify Result types sometimes
+    let results: Vec<Result<f64, &str>> = vec![-1, 2, 3]
+        .into_iter()
+        .map(processor)
+        .collect();
+
+    // Problem 3: Higher-order functions
+    fn apply_twice<F, T>(f: F, value: T) -> T
+    where
+        F: Fn(T) -> T,
+        T: Copy,
+    {
+        f(f(value))
+    }
+
+    // Sometimes need explicit type parameters
+    let result = apply_twice::<_, i32>(|x| x * 2, 5);
+}
+```
+
+### 11. Impl Trait and Closure Return Types
+
+Advanced patterns for returning closures from functions.
+
+```rust
+// Basic: Return closure with impl Trait
+fn create_multiplier(factor: i32) -> impl Fn(i32) -> i32 {
+    move |x| x * factor
+}
+
+// Can't use impl Trait in traits (before Rust 1.75)
+trait OrderProcessor {
+    // This requires nightly or newer Rust
+    // fn create_validator(&self) -> impl Fn(&Order) -> bool;
+
+    // Stable workaround
+    fn create_validator(&self) -> Box<dyn Fn(&Order) -> bool>;
+}
+
+// Multiple closure return types
+fn create_calculator(use_fee: bool) -> Box<dyn Fn(f64) -> f64> {
+    if use_fee {
+        Box::new(|price| price * 1.001)
+    } else {
+        Box::new(|price| price)
+    }
+}
+
+// Generic closure return with lifetime
+fn create_filter<'a>(threshold: f64) -> impl Fn(&'a Order) -> bool + 'a {
+    move |order: &Order| order.price > threshold
+}
+```
+
+### 12. Closure Coercion and Trait Hierarchy
+
+Understanding how closure traits coerce.
+
+```rust
+fn closure_coercion() {
+    // Hierarchy: Fn : FnMut : FnOnce
+
+    fn takes_fn<F: Fn()>(f: F) {
+        f();
+        f();  // Can call multiple times
+    }
+
+    fn takes_fn_mut<F: FnMut()>(mut f: F) {
+        f();
+        f();  // Can call multiple times and mutate
+    }
+
+    fn takes_fn_once<F: FnOnce()>(f: F) {
+        f();  // Can only call once
+    }
+
+    // Fn closure (most restrictive)
+    let print_hello = || println!("Hello");
+    takes_fn(print_hello);
+    takes_fn_mut(print_hello);    // Fn coerces to FnMut
+    takes_fn_once(print_hello);   // Fn coerces to FnOnce
+
+    // FnMut closure
+    let mut counter = 0;
+    let mut increment = || counter += 1;
+    // takes_fn(increment);       // Error: FnMut doesn't coerce to Fn
+    takes_fn_mut(increment);
+    takes_fn_once(increment);     // FnMut coerces to FnOnce
+
+    // FnOnce closure
+    let data = vec![1, 2, 3];
+    let consume = move || drop(data);
+    // takes_fn(consume);         // Error: FnOnce doesn't coerce to Fn
+    // takes_fn_mut(consume);     // Error: FnOnce doesn't coerce to FnMut
+    takes_fn_once(consume);
+}
+```
+
+### 13. Performance: Iterator Fusion and Optimization
+
+Advanced performance patterns with closures.
+
+```rust
+fn performance_optimizations() {
+    let data = vec![1; 1_000_000];
+
+    // Bad: Multiple allocations
+    let bad_result: Vec<i32> = data.iter()
+        .map(|&x| x * 2)
+        .collect::<Vec<_>>()  // First allocation
+        .into_iter()
+        .filter(|&x| x > 1)
+        .collect();           // Second allocation
+
+    // Good: Single allocation (iterator fusion)
+    let good_result: Vec<i32> = data.iter()
+        .map(|&x| x * 2)
+        .filter(|&x| x > 1)
+        .collect();
+
+    // Excellent: No allocation with fold
+    let sum: i64 = data.iter()
+        .map(|&x| x as i64)
+        .filter(|&x| x > 0)
+        .fold(0i64, |acc, x| acc + x);
+
+    // Loop fusion with multiple operations
+    let (sum, count, max) = data.iter()
+        .fold((0i64, 0usize, 0i32), |(sum, count, max), &x| {
+            (sum + x as i64, count + 1, max.max(x))
+        });
+
+    println!("Sum: {}, Count: {}, Max: {}", sum, count, max);
+
+    // Using specialized methods for better performance
+    use std::cmp;
+
+    // Instead of: data.iter().map(|x| x * 2).max()
+    // Use: data.iter().max().map(|x| x * 2)
+
+    let max_doubled = data.iter()
+        .max()
+        .map(|&x| x * 2);
+}
+```
+
+### 14. Const Generics with Closures
+
+Using const generics to create specialized closure-based functions.
+
+```rust
+fn const_generic_closures() {
+    // Apply operation N times
+    fn apply_n_times<F, const N: usize>(mut f: F, initial: i32) -> i32
+    where
+        F: FnMut(i32) -> i32,
+    {
+        let mut result = initial;
+        for _ in 0..N {
+            result = f(result);
+        }
+        result
+    }
+
+    let double = |x| x * 2;
+    let result = apply_n_times::<_, 3>(double, 5);  // 5 * 2 * 2 * 2 = 40
+    println!("Result: {}", result);
+
+    // Fixed-size processing
+    fn process_batch<F, T, const SIZE: usize>(items: [T; SIZE], processor: F) -> [T; SIZE]
+    where
+        F: Fn(T) -> T,
+        T: Copy,
+    {
+        let mut result = items;
+        for i in 0..SIZE {
+            result[i] = processor(result[i]);
+        }
+        result
+    }
+
+    let prices = [100.0, 150.0, 200.0];
+    let with_fees = process_batch(prices, |p| p * 1.001);
+    println!("With fees: {:?}", with_fees);
+}
+```
+
+### 15. Advanced Error Handling Patterns
+
+Sophisticated error handling with closures and combinators.
+
+```rust
+use std::error::Error;
+
+fn advanced_error_handling() {
+    // Custom error combinator
+    fn try_with_fallback<T, E, F, G>(primary: F, fallback: G) -> Result<T, E>
+    where
+        F: FnOnce() -> Result<T, E>,
+        G: FnOnce(E) -> Result<T, E>,
+    {
+        primary().or_else(fallback)
+    }
+
+    // Retry with exponential backoff
+    fn retry_with_backoff<T, E, F>(mut operation: F, max_attempts: u32) -> Result<T, E>
+    where
+        F: FnMut() -> Result<T, E>,
+    {
+        let mut attempt = 0;
+        loop {
+            match operation() {
+                Ok(result) => return Ok(result),
+                Err(e) if attempt >= max_attempts - 1 => return Err(e),
+                Err(_) => {
+                    attempt += 1;
+                    std::thread::sleep(
+                        std::time::Duration::from_millis(100 * 2_u64.pow(attempt))
+                    );
+                }
+            }
+        }
+    }
+
+    // Transaction pattern
+    fn with_transaction<T, E, F>(operation: F) -> Result<T, E>
+    where
+        F: FnOnce() -> Result<T, E>,
+    {
+        println!("Starting transaction");
+        let result = operation();
+        match &result {
+            Ok(_) => println!("Committing transaction"),
+            Err(_) => println!("Rolling back transaction"),
+        }
+        result
+    }
+
+    // Chain of validators
+    type Validator<T> = Box<dyn Fn(&T) -> Result<(), String>>;
+
+    fn validate_with_chain<T>(value: &T, validators: Vec<Validator<T>>) -> Result<(), Vec<String>> {
+        let errors: Vec<String> = validators
+            .iter()
+            .filter_map(|validator| validator(value).err())
+            .collect();
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+```
+
+---
+
 ## Summary
 
 ### Most Common Closure Patterns
@@ -1608,21 +2557,31 @@ fn main() {
 ### Closure Traits Hierarchy
 
 ```
-FnOnce (least restrictive)
+FnOnce (least restrictive - can only call once)
   ↓
 FnMut (can mutate captured variables)
   ↓
 Fn (most restrictive, can be called multiple times)
 ```
 
+### Understanding Capture Modes
+
+1. **`.iter()`** → Borrows elements as `&T`
+2. **`.iter_mut()`** → Borrows elements as `&mut T`
+3. **`.into_iter()`** → Takes ownership of elements as `T`
+4. **`move` keyword** → Forces closure to take ownership
+5. **Pattern matching** → Use `|&x|` or `|&&x|` to destructure references
+
 ### Best Practices
 
 1. **Prefer iterators over loops** - More expressive and potentially faster
 2. **Chain operations** - Avoid intermediate collections
-3. **Use type inference** - Let Rust infer closure types
+3. **Use type inference** - Let Rust infer closure types when possible
 4. **Handle errors gracefully** - Use `filter_map`, `Result`, `Option`
 5. **Be mindful of moves** - Understand when closures capture by value
 6. **Profile performance** - Iterators are usually fast, but measure
+7. **Optimize closure size** - Capture only what you need
+8. **Use HRTBs** - For flexible lifetime handling in generic APIs
 
 ### Common Mistakes to Avoid
 
@@ -1631,6 +2590,8 @@ Fn (most restrictive, can be called multiple times)
 3. Capturing too much in closures (use specific captures)
 4. Forgetting about lazy evaluation
 5. Using `unwrap()` instead of proper error handling
+6. Not understanding double reference patterns (`&&T`)
+7. Fighting the borrow checker instead of using `.clone()` when appropriate
 
 ### When to Use What
 
@@ -1638,5 +2599,7 @@ Fn (most restrictive, can be called multiple times)
 - **Closures**: One-off operations, capturing environment
 - **Iterators**: Data transformation pipelines
 - **Loops**: When you need complex control flow or early breaks
+- **Async closures**: For concurrent/parallel operations
+- **Function pointers**: For FFI or when zero-size is critical
 
 This guide covers closures from basics to advanced patterns, with practical examples from trading and order book domains!
