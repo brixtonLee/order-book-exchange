@@ -2,10 +2,12 @@ use utoipa::OpenApi;
 
 use crate::api::handlers;
 use crate::api::datasource_handlers;
+use crate::api::rabbitmq_handlers;
 use crate::api::responses::*;
 use crate::metrics::{SpreadMetrics, MicrostructureMetrics, TradingSignal};
 use crate::models::{Order, OrderSide, OrderStatus, OrderType};
 use crate::models::datasource::*;
+use crate::rabbitmq::{RabbitMQConfig, ReconnectConfig, PublisherStats};
 
 /// OpenAPI v1 specification
 #[derive(OpenApi)]
@@ -94,6 +96,10 @@ pub struct ApiDocV1;
         datasource_handlers::stop_datasource,
         datasource_handlers::get_datasource_status,
         datasource_handlers::get_health,
+        // RabbitMQ control endpoints
+        rabbitmq_handlers::connect_rabbitmq,
+        rabbitmq_handlers::get_rabbitmq_status,
+        rabbitmq_handlers::disconnect_rabbitmq,
     ),
     components(
         schemas(
@@ -127,11 +133,19 @@ pub struct ApiDocV1;
             FixCredentials,
             MicrostructureMetrics,
             TradingSignal,
+            // RabbitMQ models
+            RabbitMQConfig,
+            ReconnectConfig,
+            PublisherStats,
+            rabbitmq_handlers::RabbitMQConnectRequest,
+            rabbitmq_handlers::RabbitMQConnectResponse,
+            rabbitmq_handlers::RabbitMQStatusResponse,
         )
     ),
     tags(
         (name = "health", description = "System health monitoring"),
         (name = "datasource", description = "FIX datasource connection control"),
+        (name = "RabbitMQ", description = "RabbitMQ messaging integration"),
         (name = "Health", description = "Health check endpoints"),
         (name = "Orders", description = "Order management endpoints"),
         (name = "Order Book", description = "Order book and market data endpoints"),

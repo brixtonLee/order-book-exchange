@@ -17,6 +17,7 @@ pub mod protocol;
 pub mod persistence;
 pub mod algorithms;
 pub mod disruptor;
+pub mod rabbitmq;
 
 // pub use = re-export at crate root
 pub use api::{create_router, AppState};

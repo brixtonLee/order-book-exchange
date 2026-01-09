@@ -89,6 +89,10 @@ src/
 │   ├── broadcaster.rs      # Broadcaster for WebSocket fanout
 │   ├── handler.rs          # WebSocket connection handler
 │   └── messages.rs         # WsMessage, OrderBookUpdate, TradeUpdate
+├── rabbitmq/               # RabbitMQ messaging integration
+│   ├── config.rs           # RabbitMQConfig, ReconnectConfig, RoutingKeyBuilder
+│   ├── publisher.rs        # RabbitMQPublisher with connection pooling
+│   └── bridge.rs           # FixToRabbitMQBridge - FIX to RabbitMQ streaming
 ├── ctrader_fix/            # cTrader FIX protocol integration
 │   ├── client.rs           # CTraderFixClient - TCP client with FIX encoding/decoding
 │   ├── messages.rs         # FIX message definitions
@@ -169,6 +173,11 @@ See `CTRADER_FIX_STREAMING.md` for detailed integration guide and WebSocket-like
 - `POST /api/v1/datasource/symbols/subscribe` - Subscribe to symbol feed
 - `POST /api/v1/datasource/symbols/unsubscribe` - Unsubscribe from symbol feed
 
+### RabbitMQ Messaging
+- `POST /api/v1/rabbitmq/connect` - Connect to RabbitMQ server
+- `GET /api/v1/rabbitmq/status` - Get RabbitMQ connection status and publisher stats
+- `POST /api/v1/rabbitmq/disconnect` - Disconnect from RabbitMQ
+
 ### Documentation
 - `GET /swagger-ui` - Interactive Swagger UI
 - `GET /api-docs/v1/openapi.json` - OpenAPI v1.0 spec
@@ -204,6 +213,15 @@ Helper functions like `remove_order_from_price_level()` and `add_order_to_price_
 - **Symbol Mapping**: Maps cTrader symbol IDs to human-readable names (e.g., `1` → `EURUSD`)
 - **Zero-copy Parsing**: Minimizes allocations during FIX message parsing for maximum throughput
 
+### RabbitMQ Integration Architecture
+- **Dual Output**: FIX ticks are fan-out to both WebSocket and RabbitMQ bridges in parallel
+- **Publisher with Auto-Reconnect**: `RabbitMQPublisher` handles connection pooling, exponential backoff, and automatic reconnection
+- **Topic Exchange**: Uses `market.data` topic exchange with routing keys like `tick.EURUSD`, `tick.XAUUSD`
+- **Publisher Confirms**: Ensures at-least-once delivery with acknowledgments from broker
+- **Message Format**: JSON serialization for cross-platform compatibility
+- **Docker Integration**: RabbitMQ runs in Docker with management UI at http://localhost:15672
+- **Flow**: FIX Client → Fan-out Task → (WebSocket Bridge + RabbitMQ Bridge) → (WebSocket Clients + RabbitMQ Consumers)
+
 ## Dependencies
 
 Key crates:
@@ -215,6 +233,7 @@ Key crates:
 - **utoipa + utoipa-swagger-ui** - OpenAPI/Swagger documentation
 - **dashmap** - Concurrent HashMap for WebSocket subscribers
 - **bytes + tokio-util** - For FIX protocol handling
+- **lapin** - Async AMQP 0.9.1 client for RabbitMQ integration
 
 ## Future Enhancements Roadmap
 

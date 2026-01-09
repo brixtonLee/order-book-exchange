@@ -12,6 +12,7 @@ use crate::websocket::{websocket_handler, Broadcaster, WsState};
 
 use super::handlers::*;
 use super::datasource_handlers::*;
+use super::rabbitmq_handlers::*;
 use super::openapi::{ApiDocV1, ApiDocV2};
 
 /// Create the API router with Swagger UI and WebSocket support
@@ -51,6 +52,11 @@ pub fn create_router(
         .route("/api/v1/datasource/start", post(start_datasource))
         .route("/api/v1/datasource/stop", post(stop_datasource))
         .route("/api/v1/datasource/status", get(get_datasource_status))
+        .with_state(datasource_manager.clone())
+        // RabbitMQ control endpoints
+        .route("/api/v1/rabbitmq/connect", post(connect_rabbitmq))
+        .route("/api/v1/rabbitmq/status", get(get_rabbitmq_status))
+        .route("/api/v1/rabbitmq/disconnect", post(disconnect_rabbitmq))
         .with_state(datasource_manager.clone())
         // Legacy health check (kept for backwards compatibility)
         .route("/health", get(health_check))

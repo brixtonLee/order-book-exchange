@@ -2,6 +2,7 @@ use crate::ctrader_fix::{CTraderFixClient, FixToWebSocketBridge};
 use crate::ctrader_fix::market_data::MarketTick;
 use crate::models::datasource::*;
 use crate::websocket::broadcaster::Broadcaster;
+use crate::rabbitmq::{RabbitMQPublisher, FixToRabbitMQBridge, RabbitMQConfig};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -25,13 +26,16 @@ use crate::ctrader_fix::symbol_data::symbol_parser::SymbolData;
 pub struct DatasourceManager {
     mode: Arc<RwLock<DatasourceMode>>,
     fix_client_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
-    bridge_handle: Arc<RwLock<Option<JoinHandle<()>>>>, 
+    bridge_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
+    rabbitmq_bridge_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
     fix_config: Arc<RwLock<Option<FixConfig>>>,
     heartbeat_counter: Arc<AtomicU64>,
     connection_metrics: Arc<RwLock<Option<ConnectionMetrics>>>,
     subscribed_symbols: Arc<RwLock<Vec<SymbolData>>>,
     symbol_mapping: Arc<RwLock<HashMap<String, String>>>,
     broadcaster: Broadcaster,
+    rabbitmq_publisher: Arc<RwLock<Option<Arc<RabbitMQPublisher>>>>,
+    rabbitmq_config: Arc<RwLock<Option<RabbitMQConfig>>>,
 }
 
 impl DatasourceManager {
@@ -41,12 +45,15 @@ impl DatasourceManager {
             mode: Arc::new(RwLock::new(DatasourceMode::Disconnected)),
             fix_client_handle: Arc::new(RwLock::new(None)),
             bridge_handle: Arc::new(RwLock::new(None)),
+            rabbitmq_bridge_handle: Arc::new(RwLock::new(None)),
             fix_config: Arc::new(RwLock::new(None)),
             heartbeat_counter: Arc::new(AtomicU64::new(0)),
             connection_metrics: Arc::new(RwLock::new(None)),
             subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
             symbol_mapping: Arc::new(RwLock::new(HashMap::new())),
             broadcaster,
+            rabbitmq_publisher: Arc::new(RwLock::new(None)),
+            rabbitmq_config: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -72,9 +79,9 @@ impl DatasourceManager {
 
         self.setup_fix_callbacks(&mut client, &bridge);
 
-        let (client_handle, bridge_handle) = self.spawn_connection_tasks(client, bridge, tick_receiver);
+        let (client_handle, bridge_handle, rabbitmq_handle) = self.spawn_connection_tasks(client, bridge, tick_receiver);
 
-        self.finalize_connection(client_handle, bridge_handle).await;
+        self.finalize_connection(client_handle, bridge_handle, rabbitmq_handle).await;
 
         tracing::info!("FIX connection started successfully");
         Ok(())
@@ -186,24 +193,75 @@ impl DatasourceManager {
         mut client: CTraderFixClient,
         bridge: FixToWebSocketBridge,
         tick_receiver: mpsc::UnboundedReceiver<MarketTick>,
-    ) -> (JoinHandle<()>, JoinHandle<()>) {
+    ) -> (JoinHandle<()>, JoinHandle<()>, Option<JoinHandle<()>>) {
         let client_handle = tokio::spawn(async move {
             if let Err(e) = client.connect_and_run().await {
                 tracing::error!("FIX client error: {}", e);
             }
         });
 
-        let bridge_handle = tokio::spawn(async move {
-            bridge.run(tick_receiver).await;
+        // Create broadcast channel for dual output (WebSocket + RabbitMQ)
+        let (tick_tx, tick_rx_ws) = mpsc::unbounded_channel();
+        let tick_rx_rmq = if self.rabbitmq_publisher.blocking_read().is_some() {
+            let (tx, rx) = mpsc::unbounded_channel();
+            Some((tx, rx))
+        } else {
+            None
+        };
+
+        // Fan-out task: broadcast ticks to both WebSocket and RabbitMQ channels
+        let rmq_tx_clone = tick_rx_rmq.as_ref().map(|(tx, _)| tx.clone());
+        tokio::spawn(async move {
+            let mut receiver = tick_receiver;
+            while let Some(tick) = receiver.recv().await {
+                // Send to WebSocket bridge
+                let _ = tick_tx.send(tick.clone());
+
+                // Send to RabbitMQ bridge if enabled
+                if let Some(ref rmq_tx) = rmq_tx_clone {
+                    let _ = rmq_tx.send(tick);
+                }
+            }
         });
 
-        (client_handle, bridge_handle)
+        // Spawn WebSocket bridge task
+        let bridge_handle = tokio::spawn(async move {
+            bridge.run(tick_rx_ws).await;
+        });
+
+        // Spawn RabbitMQ bridge task if configured
+        let rabbitmq_handle = if let Some((_, tick_rx_rmq)) = tick_rx_rmq {
+            let publisher_guard = self.rabbitmq_publisher.blocking_read();
+            if let Some(publisher) = publisher_guard.as_ref() {
+                let rmq_bridge = FixToRabbitMQBridge::new(Arc::clone(publisher));
+
+                // Share symbol map with RabbitMQ bridge
+                let symbol_mapping = Arc::clone(&self.symbol_mapping);
+                tokio::spawn(async move {
+                    // Update symbol map from manager
+                    let map = symbol_mapping.read().await;
+                    rmq_bridge.update_symbol_mappings(map.clone()).await;
+                    drop(map);
+
+                    // Run the bridge
+                    rmq_bridge.run(tick_rx_rmq).await;
+                });
+                Some(tokio::spawn(async {}))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        (client_handle, bridge_handle, rabbitmq_handle)
     }
 
     /// Store task handles and update connection mode
-    async fn finalize_connection(&self, client_handle: JoinHandle<()>, bridge_handle: JoinHandle<()>) {
+    async fn finalize_connection(&self, client_handle: JoinHandle<()>, bridge_handle: JoinHandle<()>, rabbitmq_handle: Option<JoinHandle<()>>) {
         *self.fix_client_handle.write().await = Some(client_handle);
         *self.bridge_handle.write().await = Some(bridge_handle);
+        *self.rabbitmq_bridge_handle.write().await = rabbitmq_handle;
         *self.mode.write().await = DatasourceMode::Connected;
     }
 
@@ -222,6 +280,14 @@ impl DatasourceManager {
         }
         if let Some(handle) = self.bridge_handle.write().await.take() {
             handle.abort();
+        }
+        if let Some(handle) = self.rabbitmq_bridge_handle.write().await.take() {
+            handle.abort();
+        }
+
+        // Disconnect RabbitMQ if connected
+        if let Some(publisher) = self.rabbitmq_publisher.read().await.as_ref() {
+            let _ = publisher.disconnect().await;
         }
 
         // Clear state
@@ -364,5 +430,59 @@ impl DatasourceManager {
     /// Get symbol name from ID
     pub async fn get_symbol_name(&self, symbol_id: &str) -> Option<String> {
         self.symbol_mapping.read().await.get(symbol_id).cloned()
+    }
+
+    /// Connect to RabbitMQ with given configuration
+    pub async fn connect_rabbitmq(&self, config: RabbitMQConfig) -> Result<(), String> {
+        tracing::info!("Connecting to RabbitMQ: {}", config.uri);
+
+        // Create publisher
+        let publisher = Arc::new(RabbitMQPublisher::new(config.clone()));
+
+        // Connect
+        publisher
+            .connect()
+            .await
+            .map_err(|e| format!("Failed to connect to RabbitMQ: {}", e))?;
+
+        // Store publisher and config
+        *self.rabbitmq_publisher.write().await = Some(publisher);
+        *self.rabbitmq_config.write().await = Some(config);
+
+        tracing::info!("Successfully connected to RabbitMQ");
+        Ok(())
+    }
+
+    /// Disconnect from RabbitMQ
+    pub async fn disconnect_rabbitmq(&self) -> Result<(), String> {
+        if let Some(publisher) = self.rabbitmq_publisher.write().await.take() {
+            publisher
+                .disconnect()
+                .await
+                .map_err(|e| format!("Failed to disconnect from RabbitMQ: {}", e))?;
+            *self.rabbitmq_config.write().await = None;
+            tracing::info!("Disconnected from RabbitMQ");
+            Ok(())
+        } else {
+            Err("RabbitMQ is not connected".to_string())
+        }
+    }
+
+    /// Check if RabbitMQ is connected
+    pub async fn is_rabbitmq_connected(&self) -> bool {
+        if let Some(publisher) = self.rabbitmq_publisher.read().await.as_ref() {
+            publisher.is_connected()
+        } else {
+            false
+        }
+    }
+
+    /// Get RabbitMQ publisher statistics
+    pub async fn get_rabbitmq_stats(&self) -> Option<crate::rabbitmq::PublisherStats> {
+        self.rabbitmq_publisher
+            .read()
+            .await
+            .as_ref()
+            .map(|p| p.stats())
     }
 }
