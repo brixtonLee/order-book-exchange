@@ -14,6 +14,7 @@ pub mod websocket;
 pub mod ctrader_fix;
 pub mod risk;
 pub mod protocol;
+pub mod persistence;
 
 // pub use = re-export at crate root
 pub use api::{create_router, AppState};
