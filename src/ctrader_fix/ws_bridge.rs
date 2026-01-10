@@ -69,8 +69,12 @@ impl FixToWebSocketBridge {
         let symbol = self.get_symbol_name(&tick.symbol_id).await;
         let ws_message = self.tick_to_ws_message(&tick).await;
 
+        println!("Symbol: {}", symbol);
+        
         // Broadcast to ticker channel
         let topic = format!("ticker:{}", symbol);
+        println!("Topic: {}", topic);
+        
         self.broadcaster.broadcast(&topic, ws_message.clone());
 
         // Also broadcast to wildcard channel for "all tickers"

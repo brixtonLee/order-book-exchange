@@ -77,10 +77,13 @@ impl DatasourceManager {
         );
         let bridge = FixToWebSocketBridge::new(self.broadcaster.clone());
 
+        println!("Setup Fix Callbacks");
         self.setup_fix_callbacks(&mut client, &bridge);
 
-        let (client_handle, bridge_handle, rabbitmq_handle) = self.spawn_connection_tasks(client, bridge, tick_receiver);
+        println!("Spawn Connection Tasks");
+        let (client_handle, bridge_handle, rabbitmq_handle) = self.spawn_connection_tasks(client, bridge, tick_receiver).await;
 
+        println!("Finalizing COnnectrion");
         self.finalize_connection(client_handle, bridge_handle, rabbitmq_handle).await;
 
         tracing::info!("FIX connection started successfully");
@@ -188,7 +191,7 @@ impl DatasourceManager {
     }
 
     /// Spawn FIX client and bridge tasks
-    fn spawn_connection_tasks(
+    async fn spawn_connection_tasks(
         &self,
         mut client: CTraderFixClient,
         bridge: FixToWebSocketBridge,
@@ -202,7 +205,7 @@ impl DatasourceManager {
 
         // Create broadcast channel for dual output (WebSocket + RabbitMQ)
         let (tick_tx, tick_rx_ws) = mpsc::unbounded_channel();
-        let tick_rx_rmq = if self.rabbitmq_publisher.blocking_read().is_some() {
+        let tick_rx_rmq = if self.rabbitmq_publisher.read().await.is_some() {
             let (tx, rx) = mpsc::unbounded_channel();
             Some((tx, rx))
         } else {
