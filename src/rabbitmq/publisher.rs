@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::RwLock;
 use std::time::Duration;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use super::config::RabbitMQConfig;
 
@@ -34,7 +35,7 @@ pub enum RabbitMQError {
 pub type Result<T> = std::result::Result<T, RabbitMQError>;
 
 /// Statistics for RabbitMQ publisher
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PublisherStats {
     pub messages_published: u64,
     pub messages_confirmed: u64,

@@ -1,11 +1,12 @@
 use bytes::{Buf, BufMut, BytesMut};
 use std::io::{self, Error, ErrorKind};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 
 use crate::models::{Order, OrderSide, OrderType, TimeInForce, OrderStatus};
-use crate::models::stp::SelfTradePreventionMode;
+use crate::models::order::SelfTradePreventionMode;
 
 /// Price multiplier for fixed-point encoding
 /// Price of 100.12345678 becomes 10012345678i64
@@ -206,7 +207,7 @@ impl FramedCodec {
         }
 
         // Peek at length without consuming
-        let mut peek_buf = buf.chunk();
+        let peek_buf = buf.chunk();
         if peek_buf.len() < 2 {
             return Ok(None);
         }
@@ -227,6 +228,7 @@ impl FramedCodec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
     use rust_decimal_macros::dec;
 
     fn create_test_order() -> Order {
@@ -266,10 +268,16 @@ mod tests {
 
         let decoded = BinaryOrderMessage::decode(&mut buf).unwrap();
 
+        // Copy values to avoid packed field reference errors
+        let orig_price = binary_msg.price;
+        let orig_quantity = binary_msg.quantity;
+        let decoded_price = decoded.price;
+        let decoded_quantity = decoded.quantity;
+
         assert_eq!(decoded.side, binary_msg.side);
         assert_eq!(decoded.order_type, binary_msg.order_type);
-        assert_eq!(decoded.price, binary_msg.price);
-        assert_eq!(decoded.quantity, binary_msg.quantity);
+        assert_eq!(decoded_price, orig_price);
+        assert_eq!(decoded_quantity, orig_quantity);
     }
 
     #[test]

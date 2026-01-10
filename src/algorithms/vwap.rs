@@ -1,5 +1,6 @@
 use chrono::{DateTime, Duration, NaiveTime, Utc};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal_macros::dec;
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -7,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::models::{Order, OrderSide, OrderType, OrderStatus, TimeInForce};
-use crate::models::stp::SelfTradePreventionMode;
+use crate::models::order::SelfTradePreventionMode;
 use super::twap::AlgorithmStatus;
 
 /// VWAP execution algorithm
@@ -121,6 +122,12 @@ impl VolumeProfile {
             .range(start..=end)
             .map(|(_, v)| v)
             .sum()
+    }
+}
+
+impl Default for VolumeProfile {
+    fn default() -> Self {
+        Self::us_equity_default()
     }
 }
 

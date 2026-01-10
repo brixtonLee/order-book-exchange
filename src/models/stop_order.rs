@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::{OrderSide, OrderStatus, TimeInForce};
-use super::stp::SelfTradePreventionMode;
+use super::{OrderSide, TimeInForce};
+use super::order::SelfTradePreventionMode;
 
 /// Condition that triggers the stop order
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

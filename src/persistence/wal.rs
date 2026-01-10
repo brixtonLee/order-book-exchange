@@ -297,7 +297,7 @@ mod tests {
     use chrono::Utc;
     use rust_decimal_macros::dec;
     use crate::models::{OrderSide, OrderType, OrderStatus, TimeInForce};
-    use crate::models::stp::SelfTradePreventionMode;
+    use crate::models::order::SelfTradePreventionMode;
 
     fn create_test_order() -> Order {
         Order {

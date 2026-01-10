@@ -30,8 +30,8 @@ impl From<MarketTick> for RabbitMQMarketTick {
             symbol_name: tick.symbol_id.clone(), // Will be updated by bridge
             bid_price: tick.bid_price,
             ask_price: tick.ask_price,
-            bid_size: tick.bid_size,
-            ask_size: tick.ask_size,
+            bid_size: None, // Size information not available in MarketTick
+            ask_size: None, // Size information not available in MarketTick
             timestamp: tick.timestamp,
         }
     }
@@ -165,14 +165,14 @@ mod tests {
         let mut tick = MarketTick::new("41".to_string());
         tick.bid_price = Some(Decimal::from_str("2650.50").unwrap());
         tick.ask_price = Some(Decimal::from_str("2651.00").unwrap());
-        tick.bid_size = Some(Decimal::from_str("1000000").unwrap());
-        tick.ask_size = Some(Decimal::from_str("1500000").unwrap());
 
         let rabbitmq_tick = RabbitMQMarketTick::from(tick);
 
         assert_eq!(rabbitmq_tick.symbol_id, "41");
         assert_eq!(rabbitmq_tick.bid_price, Some(Decimal::from_str("2650.50").unwrap()));
         assert_eq!(rabbitmq_tick.ask_price, Some(Decimal::from_str("2651.00").unwrap()));
+        assert_eq!(rabbitmq_tick.bid_size, None); // Size not available in MarketTick
+        assert_eq!(rabbitmq_tick.ask_size, None); // Size not available in MarketTick
     }
 
     #[tokio::test]

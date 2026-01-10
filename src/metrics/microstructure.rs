@@ -1,11 +1,12 @@
 use rust_decimal::Decimal;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use std::collections::VecDeque;
 use utoipa::ToSchema;
 
-use crate::models::{OrderBook, OrderSide};
+use crate::models::OrderBook;
 
 /// Market microstructure analytics
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -44,8 +45,8 @@ pub struct MicrostructureMetrics {
 impl MicrostructureMetrics {
     /// Calculate all microstructure metrics from order book
     pub fn from_order_book(book: &OrderBook, depth_levels: usize) -> Option<Self> {
-        let best_bid = book.best_bid()?;
-        let best_ask = book.best_ask()?;
+        let best_bid = book.get_best_bid()?;
+        let best_ask = book.get_best_ask()?;
 
         // Get volumes at best prices
         let best_bid_vol = book.bids.get(&best_bid)
@@ -126,13 +127,17 @@ impl MicrostructureMetrics {
             .collect();
 
         for (i, (_price, level)) in bid_levels.iter().enumerate() {
-            let weight = decay.powi(i as i64);
+            let weight = Decimal::from_f64(
+                decay.to_f64().unwrap_or(1.0).powi(i as i32)
+            ).unwrap_or(Decimal::ONE);
             bid_weighted += level.total_quantity * weight;
             total_bid += level.total_quantity;
         }
 
         for (i, (_price, level)) in ask_levels.iter().enumerate() {
-            let weight = decay.powi(i as i64);
+            let weight = Decimal::from_f64(
+                decay.to_f64().unwrap_or(1.0).powi(i as i32)
+            ).unwrap_or(Decimal::ONE);
             ask_weighted += level.total_quantity * weight;
             total_ask += level.total_quantity;
         }
@@ -219,7 +224,7 @@ impl SmoothedMetrics {
             return Decimal::ZERO;
         }
 
-        let alpha_dec = Decimal::from_f64_retain(alpha).unwrap_or(dec!(0.2));
+        let alpha_dec = Decimal::from_f64(alpha).unwrap_or(dec!(0.2));
         let one_minus_alpha = Decimal::ONE - alpha_dec;
         let mut ewma = Decimal::ZERO;
 
@@ -285,44 +290,41 @@ impl SmoothedMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{Order, OrderType, OrderStatus, TimeInForce};
-    use crate::models::stp::SelfTradePreventionMode;
     use uuid::Uuid;
 
     fn create_test_book() -> OrderBook {
-        let mut book = OrderBook::new();
+        use crate::models::orderbook::PriceLevel;
+        let mut book = OrderBook::new("TEST".to_string());
 
-        // Add bids
-        book.add_order(create_order(OrderSide::Buy, dec!(100.00), dec!(5000)));
-        book.add_order(create_order(OrderSide::Buy, dec!(99.95), dec!(3000)));
-        book.add_order(create_order(OrderSide::Buy, dec!(99.90), dec!(2000)));
+        // Add bids manually
+        let mut bid1 = PriceLevel::new(dec!(100.00));
+        bid1.add_order(Uuid::new_v4(), dec!(5000));
+        book.bids.insert(dec!(100.00), bid1);
 
-        // Add asks
-        book.add_order(create_order(OrderSide::Sell, dec!(100.05), dec!(2000)));
-        book.add_order(create_order(OrderSide::Sell, dec!(100.10), dec!(4000)));
-        book.add_order(create_order(OrderSide::Sell, dec!(100.15), dec!(3000)));
+        let mut bid2 = PriceLevel::new(dec!(99.95));
+        bid2.add_order(Uuid::new_v4(), dec!(3000));
+        book.bids.insert(dec!(99.95), bid2);
+
+        let mut bid3 = PriceLevel::new(dec!(99.90));
+        bid3.add_order(Uuid::new_v4(), dec!(2000));
+        book.bids.insert(dec!(99.90), bid3);
+
+        // Add asks manually
+        let mut ask1 = PriceLevel::new(dec!(100.05));
+        ask1.add_order(Uuid::new_v4(), dec!(2000));
+        book.asks.insert(dec!(100.05), ask1);
+
+        let mut ask2 = PriceLevel::new(dec!(100.10));
+        ask2.add_order(Uuid::new_v4(), dec!(4000));
+        book.asks.insert(dec!(100.10), ask2);
+
+        let mut ask3 = PriceLevel::new(dec!(100.15));
+        ask3.add_order(Uuid::new_v4(), dec!(3000));
+        book.asks.insert(dec!(100.15), ask3);
 
         book
     }
 
-    fn create_order(side: OrderSide, price: Decimal, quantity: Decimal) -> Order {
-        Order {
-            id: Uuid::new_v4(),
-            symbol: "TEST".to_string(),
-            side,
-            order_type: OrderType::Limit,
-            price: Some(price),
-            quantity,
-            filled_quantity: Decimal::ZERO,
-            status: OrderStatus::New,
-            user_id: "test_user".to_string(),
-            timestamp: Utc::now(),
-            time_in_force: TimeInForce::GTC,
-            stp_mode: SelfTradePreventionMode::None,
-            post_only: false,
-            expire_time: None,
-        }
-    }
 
     #[test]
     fn test_microstructure_metrics() {

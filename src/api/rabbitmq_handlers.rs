@@ -4,9 +4,10 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use utoipa::ToSchema;
 
-use crate::api::AppState;
+use crate::datasource::DatasourceManager;
 use crate::rabbitmq::{RabbitMQConfig, PublisherStats};
 
 /// RabbitMQ connection request
@@ -48,10 +49,10 @@ pub struct RabbitMQStatusResponse {
     tag = "RabbitMQ"
 )]
 pub async fn connect_rabbitmq(
-    State(state): State<AppState>,
+    State(datasource_manager): State<Arc<DatasourceManager>>,
     Json(request): Json<RabbitMQConnectRequest>,
 ) -> Result<Json<RabbitMQConnectResponse>, StatusCode> {
-    match state.datasource_manager.connect_rabbitmq(request.config).await {
+    match datasource_manager.connect_rabbitmq(request.config).await {
         Ok(_) => Ok(Json(RabbitMQConnectResponse {
             success: true,
             message: "Successfully connected to RabbitMQ".to_string(),
@@ -78,10 +79,10 @@ pub async fn connect_rabbitmq(
     tag = "RabbitMQ"
 )]
 pub async fn get_rabbitmq_status(
-    State(state): State<AppState>,
+    State(datasource_manager): State<Arc<DatasourceManager>>,
 ) -> Json<RabbitMQStatusResponse> {
-    let connected = state.datasource_manager.is_rabbitmq_connected().await;
-    let stats = state.datasource_manager.get_rabbitmq_stats().await;
+    let connected = datasource_manager.is_rabbitmq_connected().await;
+    let stats = datasource_manager.get_rabbitmq_stats().await;
 
     // Get exchange name from config if available
     let exchange = if connected {
@@ -110,9 +111,9 @@ pub async fn get_rabbitmq_status(
     tag = "RabbitMQ"
 )]
 pub async fn disconnect_rabbitmq(
-    State(state): State<AppState>,
+    State(datasource_manager): State<Arc<DatasourceManager>>,
 ) -> Json<RabbitMQConnectResponse> {
-    match state.datasource_manager.disconnect_rabbitmq().await {
+    match datasource_manager.disconnect_rabbitmq().await {
         Ok(_) => Json(RabbitMQConnectResponse {
             success: true,
             message: "Successfully disconnected from RabbitMQ".to_string(),

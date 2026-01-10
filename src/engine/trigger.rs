@@ -167,6 +167,7 @@ impl TriggerEngine {
             stp_mode: stop.stp_mode,
             post_only: stop.post_only,
             expire_time: stop.expire_time,
+            iceberg: None,
         }
     }
 
@@ -299,7 +300,7 @@ mod tests {
     use super::*;
     use rust_decimal_macros::dec;
     use crate::models::{OrderSide, TimeInForce, TriggerCondition};
-    use crate::models::stp::SelfTradePreventionMode;
+    use crate::models::order::SelfTradePreventionMode;
 
     fn create_test_stop(
         side: OrderSide,

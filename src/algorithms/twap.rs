@@ -1,11 +1,12 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::models::{Order, OrderSide, OrderType, OrderStatus, TimeInForce};
-use crate::models::stp::SelfTradePreventionMode;
+use crate::models::order::SelfTradePreventionMode;
 
 /// TWAP execution algorithm
 /// Divides order evenly across time intervals
@@ -213,6 +214,7 @@ pub struct TwapStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
     use rust_decimal_macros::dec;
 
     #[test]
