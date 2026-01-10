@@ -6,14 +6,21 @@ use std::sync::Arc;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+use crate::datasource::DatasourceManager;
 use crate::engine::OrderBookEngine;
 use crate::websocket::{websocket_handler, Broadcaster, WsState};
 
 use super::handlers::*;
+use super::datasource_handlers::*;
+use super::rabbitmq_handlers::*;
 use super::openapi::{ApiDocV1, ApiDocV2};
 
 /// Create the API router with Swagger UI and WebSocket support
-pub fn create_router(engine: Arc<OrderBookEngine>, broadcaster: Broadcaster) -> Router {
+pub fn create_router(
+    engine: Arc<OrderBookEngine>,
+    broadcaster: Broadcaster,
+    datasource_manager: Arc<DatasourceManager>,
+) -> Router {
     // Create WebSocket state
     let ws_state = Arc::new(WsState {
         broadcaster: broadcaster.clone(),
@@ -38,7 +45,20 @@ pub fn create_router(engine: Arc<OrderBookEngine>, broadcaster: Broadcaster) -> 
         // WebSocket endpoint
         .route("/ws", get(websocket_handler))
         .with_state(ws_state.clone())
-        // Health check
+        // Health endpoint (uses datasource manager)
+        .route("/api/v1/health", get(get_health))
+        .with_state(datasource_manager.clone())
+        // Datasource control endpoints
+        .route("/api/v1/datasource/start", post(start_datasource))
+        .route("/api/v1/datasource/stop", post(stop_datasource))
+        .route("/api/v1/datasource/status", get(get_datasource_status))
+        .with_state(datasource_manager.clone())
+        // RabbitMQ control endpoints
+        .route("/api/v1/rabbitmq/connect", post(connect_rabbitmq))
+        .route("/api/v1/rabbitmq/status", get(get_rabbitmq_status))
+        .route("/api/v1/rabbitmq/disconnect", post(disconnect_rabbitmq))
+        .with_state(datasource_manager.clone())
+        // Legacy health check (kept for backwards compatibility)
         .route("/health", get(health_check))
         // Order endpoints
         .route("/api/v1/orders", post(submit_order))
@@ -51,6 +71,7 @@ pub fn create_router(engine: Arc<OrderBookEngine>, broadcaster: Broadcaster) -> 
         .route("/api/v1/trades/:symbol", get(get_trades))
         // Metrics endpoints
         .route("/api/v1/metrics/exchange", get(get_exchange_metrics))
+        .route("/api/v1/orderbook/:symbol/microstructure", get(get_microstructure_metrics))
         // Add state for REST endpoints
         .with_state(engine)
 }

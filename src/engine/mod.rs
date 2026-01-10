@@ -12,6 +12,7 @@ pub mod fees;
 pub mod matching;
 pub mod orderbook;
 pub mod validation;
+pub mod trigger;
 
 // Re-export commonly used types for convenience
 pub use errors::OrderBookError;
@@ -19,3 +20,4 @@ pub use fees::{calculate_exchange_profit, calculate_maker_fee, calculate_taker_f
 pub use matching::{match_order, MatchingError};
 pub use orderbook::OrderBookEngine;
 pub use validation::validate_order;
+pub use trigger::TriggerEngine;

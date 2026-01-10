@@ -75,11 +75,11 @@ impl OrderBook {
     // These highest buy price and lowest sell price are beneficial to broker. Since we are acting as a market maker
     /// Get the best bid price (highest buy price)
     pub fn get_best_bid(&self) -> Option<Decimal> {
-        // self.bids.keys().next_back().copied()
         self.bids.keys().next_back().cloned()
     }
 
     /// Get the best ask price (lowest sell price)
+    /// Takes the first element from the iterator, which will be the lowest ask price due to the natural ordering of the map. 
     pub fn get_best_ask(&self) -> Option<Decimal> {
         self.asks.keys().next().copied()
     }

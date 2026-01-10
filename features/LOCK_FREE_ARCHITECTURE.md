@@ -1718,4 +1718,4 @@ criterion = "0.5"             # Benchmarking
 1. Start with the hybrid approach (Section 10) for production
 2. Use crossbeam crates rather than implementing from scratch
 3. Benchmark your specific workload before committing to lock-free
-4. See [DATABASE_DATA_ENGINEERING.md](./DATABASE_DATA_ENGINEERING.md) for persistence layer
+4. See [DATABASE_DATA_ENGINEERING.md](DATABASE_DATA_ENGINEERING.md) for persistence layer

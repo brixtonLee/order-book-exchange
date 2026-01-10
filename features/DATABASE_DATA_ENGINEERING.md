@@ -2184,5 +2184,4 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 1. Start with **Phase 1**: Implement RocksDB-based WAL for durability
 2. Add **QuestDB** for time-series analytics
 3. Integrate with your existing order book via the event patterns shown
-4. See [HFT_FEATURES_ROADMAP.md](./HFT_FEATURES_ROADMAP.md) for trading features
-5. See [LOCK_FREE_ARCHITECTURE.md](./LOCK_FREE_ARCHITECTURE.md) for performance optimization
+5. See [LOCK_FREE_ARCHITECTURE.md](LOCK_FREE_ARCHITECTURE.md) for performance optimization

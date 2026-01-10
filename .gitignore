@@ -1,17 +1,9 @@
 /target
-# Ignore all .md files
-*.md
 
 # BUT keep specific important ones
 !README.md
 !CHANGELOG.md
 !LICENSE.md
-
-# Ignore .md files only in specific directory
-docs/*.md
-
-# Ignore .md files in all subdirectories
-**/*.md
 
 # Ignore specific .md file
 notes.md
