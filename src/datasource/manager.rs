@@ -219,7 +219,7 @@ impl DatasourceManager {
 
         // Fan-out task: broadcast ticks to WebSocket, RabbitMQ, and Database
         let rmq_tx_clone = tick_rx_rmq.as_ref().map(|(tx, _)| tx.clone());
-        let db_tx_clone = self.tick_persister_tx.blocking_read().clone();
+        let db_tx_clone = self.tick_persister_tx.read().await.clone();
         tokio::spawn(async move {
             let mut receiver = tick_receiver;
             while let Some(tick) = receiver.recv().await {
