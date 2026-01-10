@@ -4,11 +4,10 @@ use crate::database::repositories::{OhlcRepository, SymbolRepository, TickReposi
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
     Json,
 };
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::database_handlers::DatabaseState;
+use crate::api::database_handlers::DatabaseState;
 use crate::datasource::DatasourceManager;
 use crate::engine::OrderBookEngine;
 use crate::websocket::{websocket_handler, Broadcaster, WsState};
@@ -30,7 +30,7 @@ pub fn create_router(
         engine: engine.clone(),
     });
 
-    let mut router = Router::new()
+    let router = Router::new()
         // Swagger UI with version selection
         .merge(
             SwaggerUi::new("/swagger-ui")
@@ -78,9 +78,9 @@ pub fn create_router(
         // Add state for REST endpoints
         .with_state(engine);
 
-    // Conditionally add database routes if database is configured
+    // Conditionally merge database routes if database is configured
     if let Some(db_state) = database_state {
-        router = router
+        let db_router = Router::new()
             // Symbol endpoints
             .route("/api/v1/symbols", get(get_symbols))
             .route("/api/v1/symbols/:symbol_id", get(get_symbol_by_id))
@@ -92,7 +92,9 @@ pub fn create_router(
             .route("/api/v1/ohlc/:symbol_id", get(get_ohlc_candles))
             .route("/api/v1/ohlc/:symbol_id/latest", get(get_latest_ohlc_candle))
             .with_state(db_state);
-    }
 
-    router
+        router.merge(db_router)
+    } else {
+        router
+    }
 }

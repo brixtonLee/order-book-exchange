@@ -105,54 +105,27 @@ impl TickPersister {
         // Parse symbol_id from string to i64
         let symbol_id = market_tick.symbol_id.parse::<i64>().ok()?;
 
-        // Parse prices and volumes to Decimal
-        let bid_price = Self::parse_decimal(&market_tick.bid_price)?;
-        let ask_price = Self::parse_decimal(&market_tick.ask_price)?;
+        // Get prices from MarketTick (already Decimal type)
+        let bid_price = market_tick.bid_price?;
+        let ask_price = market_tick.ask_price?;
 
-        // Use default volume if not available
-        let bid_volume = market_tick
-            .bid_size
-            .as_ref()
-            .and_then(|s| Self::parse_decimal(s))
-            .unwrap_or(Decimal::ZERO);
+        // Use zero for volumes since MarketTick doesn't have volume data
+        let bid_volume = Decimal::ZERO;
+        let ask_volume = Decimal::ZERO;
 
-        let ask_volume = market_tick
-            .ask_size
-            .as_ref()
-            .and_then(|s| Self::parse_decimal(s))
-            .unwrap_or(Decimal::ZERO);
+        // Use symbol_id as symbol_name for now (will be enriched later via symbol mapping)
+        // In production, you'd look this up from DatasourceManager.get_symbol_name()
+        let symbol_name = format!("SYM_{}", symbol_id);
 
         Some(NewTick::new(
             symbol_id,
-            market_tick.symbol_name.clone(),
-            Self::parse_timestamp(&market_tick.timestamp)?,
+            symbol_name,
+            market_tick.timestamp,
             bid_price,
             ask_price,
             bid_volume,
             ask_volume,
         ))
-    }
-
-    /// Parse string to Decimal
-    fn parse_decimal(value: &str) -> Option<Decimal> {
-        value.parse::<Decimal>().ok()
-    }
-
-    /// Parse timestamp string to DateTime<Utc>
-    fn parse_timestamp(timestamp: &str) -> Option<DateTime<Utc>> {
-        // Try parsing RFC3339 format first
-        if let Ok(dt) = DateTime::parse_from_rfc3339(timestamp) {
-            return Some(dt.with_timezone(&Utc));
-        }
-
-        // Fallback to Unix timestamp (milliseconds)
-        if let Ok(millis) = timestamp.parse::<i64>() {
-            return DateTime::from_timestamp_millis(millis);
-        }
-
-        // If parsing fails, use current time as fallback
-        tracing::warn!("Failed to parse timestamp '{}', using current time", timestamp);
-        Some(Utc::now())
     }
 }
 
@@ -161,22 +134,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_decimal() {
-        assert_eq!(
-            TickPersister::parse_decimal("1.12345"),
-            Some(Decimal::new(112345, 5))
-        );
-        assert_eq!(TickPersister::parse_decimal("invalid"), None);
-    }
+    fn test_convert_market_tick() {
+        use rust_decimal_macros::dec;
 
-    #[test]
-    fn test_parse_timestamp() {
-        // RFC3339 format
-        let result = TickPersister::parse_timestamp("2024-01-10T12:00:00Z");
-        assert!(result.is_some());
+        let market_tick = MarketTick {
+            symbol_id: "1".to_string(),
+            timestamp: Utc::now(),
+            bid_price: Some(dec!(1.1000)),
+            ask_price: Some(dec!(1.1005)),
+        };
 
-        // Unix timestamp (milliseconds)
-        let result = TickPersister::parse_timestamp("1704888000000");
-        assert!(result.is_some());
+        let new_tick = TickPersister::convert_market_tick_to_new_tick(&market_tick);
+        assert!(new_tick.is_some());
+
+        let tick = new_tick.unwrap();
+        assert_eq!(tick.symbol_id, 1);
+        assert_eq!(tick.bid_price, dec!(1.1000));
+        assert_eq!(tick.ask_price, dec!(1.1005));
     }
 }

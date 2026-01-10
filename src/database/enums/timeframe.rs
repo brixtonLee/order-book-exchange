@@ -1,4 +1,5 @@
-use diesel::deserialize::{self, FromSql};
+use diesel::deserialize::{self, FromSql, FromSqlRow};
+use diesel::expression::AsExpression;
 use diesel::pg::Pg;
 use diesel::serialize::{self, Output, ToSql};
 use diesel::sql_types::Text;

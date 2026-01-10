@@ -7,9 +7,10 @@ use utoipa::ToSchema;
 /// Tick entity - represents a market data tick from FIX feed
 ///
 /// Stored in TimescaleDB hypertable partitioned by tick_time
-#[derive(Debug, Clone, Queryable, Selectable, Identifiable, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Queryable, Selectable, Identifiable, QueryableByName, Serialize, Deserialize, ToSchema)]
 #[diesel(table_name = crate::database::schema::ticks)]
 #[diesel(primary_key(id))]
+#[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct Tick {
     /// Auto-incrementing ID
     pub id: i64,

@@ -1,7 +1,6 @@
 use crate::database::models::NewSymbol;
 use crate::database::repositories::SymbolRepository;
 use crate::datasource::DatasourceManager;
-use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::sync::Arc;
 use tokio_cron_scheduler::{Job, JobScheduler};
