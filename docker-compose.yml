@@ -1,6 +1,56 @@
 version: '3.8'
 
 services:
+  # Regular PostgreSQL for reference data (symbols, metadata)
+  postgres:
+    image: postgres:16-alpine
+    container_name: order-book-postgres
+    hostname: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: orderbook
+      POSTGRES_PASSWORD: orderbook123
+      POSTGRES_DB: orderbook_metadata
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orderbook -d orderbook_metadata"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - order-book-network
+    restart: unless-stopped
+
+  # TimescaleDB for time-series data (ticks, OHLC)
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: order-book-timescaledb
+    hostname: timescaledb
+    ports:
+      - "5433:5432"  # Use different host port to avoid conflict
+    environment:
+      POSTGRES_USER: orderbook
+      POSTGRES_PASSWORD: orderbook123
+      POSTGRES_DB: orderbook_timeseries
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+      # TimescaleDB specific settings
+      TIMESCALEDB_TELEMETRY: "off"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orderbook -d orderbook_timeseries"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - order-book-network
+    restart: unless-stopped
+
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
     container_name: order-book-rabbitmq
@@ -35,6 +85,10 @@ services:
     restart: unless-stopped
 
 volumes:
+  postgres_data:
+    driver: local
+  timescaledb_data:
+    driver: local
   rabbitmq_data:
     driver: local
   rabbitmq_logs:
