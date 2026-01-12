@@ -14,7 +14,7 @@ pub trait TickRepository: Send + Sync {
     fn insert(&self, new_tick: NewTick) -> Result<Tick, DatabaseError>;
 
     /// Batch insert ticks (optimized for high throughput)
-    fn insert_batch(&self, new_ticks: Vec<NewTick>) -> Result<usize, DatabaseError>;
+    fn insert_batch(&self, new_ticks: &[NewTick]) -> Result<usize, DatabaseError>;
 
     /// Get ticks for a symbol within time range
     fn get_by_symbol_and_time_range(
@@ -44,7 +44,6 @@ pub struct TickRepositoryImpl {
 }
 
 impl TickRepositoryImpl {
-    /// Create new tick repository with connection provider
     pub fn new<F>(get_conn: F) -> Self
     where
         F: Fn() -> Result<PgPooledConnection, DatabaseError> + Send + Sync + 'static,
@@ -67,7 +66,7 @@ impl TickRepository for TickRepositoryImpl {
             .map_err(DatabaseError::from)
     }
 
-    fn insert_batch(&self, new_ticks: Vec<NewTick>) -> Result<usize, DatabaseError> {
+    fn insert_batch(&self, new_ticks: &[NewTick]) -> Result<usize, DatabaseError> {
         if new_ticks.is_empty() {
             return Ok(0);
         }
@@ -77,7 +76,7 @@ impl TickRepository for TickRepositoryImpl {
         // Use batch insert with ON CONFLICT DO NOTHING for high throughput
         // This prevents errors from duplicate ticks
         let inserted = diesel::insert_into(ticks::table)
-            .values(&new_ticks)
+            .values(new_ticks)
             .on_conflict_do_nothing()
             .execute(&mut conn)?;
 

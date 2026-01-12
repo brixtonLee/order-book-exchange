@@ -82,7 +82,7 @@ impl TickPersister {
 
         let tick_count = buffer.len();
 
-        match self.tick_repository.insert_batch(buffer.clone()) {
+        match self.tick_repository.insert_batch(buffer) {
             Ok(inserted) => {
                 tracing::debug!(
                     "Flushed {} ticks to database ({} inserted, {} duplicates)",
