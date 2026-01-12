@@ -1,42 +1,12 @@
 // @generated automatically by Diesel CLI.
-// This file will be auto-generated after running diesel migrations
-// Run: diesel migration run --database-url=$DATABASE_URL
-// Run: diesel migration run --database-url=$TIMESCALEDB_URL
-
-// Temporary schema definitions - will be replaced by `diesel print-schema`
-diesel::table! {
-    symbols (symbol_id) {
-        symbol_id -> Int8,
-        symbol_name -> Varchar,
-        description -> Nullable<Text>,
-        digits -> Int4,
-        tick_size -> Numeric,
-        contract_size -> Nullable<Numeric>,
-        created_at -> Timestamptz,
-        updated_at -> Timestamptz,
-        last_synced_at -> Nullable<Timestamptz>,
-    }
-}
 
 diesel::table! {
-    ticks (id) {
+    ohlc_candles (symbol_id, timeframe, open_time) {
         id -> Int8,
         symbol_id -> Int8,
+        #[max_length = 50]
         symbol_name -> Varchar,
-        tick_time -> Timestamptz,
-        bid_price -> Numeric,
-        ask_price -> Numeric,
-        bid_volume -> Numeric,
-        ask_volume -> Numeric,
-        created_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    ohlc_candles (id) {
-        id -> Int8,
-        symbol_id -> Int8,
-        symbol_name -> Varchar,
+        #[max_length = 10]
         timeframe -> Varchar,
         open_time -> Timestamptz,
         close_time -> Timestamptz,
@@ -50,4 +20,38 @@ diesel::table! {
     }
 }
 
-diesel::allow_tables_to_appear_in_same_query!(symbols, ticks, ohlc_candles,);
+diesel::table! {
+    symbols (symbol_id) {
+        symbol_id -> Int8,
+        #[max_length = 50]
+        symbol_name -> Varchar,
+        description -> Nullable<Text>,
+        digits -> Int4,
+        tick_size -> Numeric,
+        contract_size -> Nullable<Numeric>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+        last_synced_at -> Nullable<Timestamptz>,
+    }
+}
+
+diesel::table! {
+    ticks (symbol_id, symbol_name, tick_time) {
+        id -> Int8,
+        symbol_id -> Int8,
+        #[max_length = 50]
+        symbol_name -> Varchar,
+        tick_time -> Timestamptz,
+        bid_price -> Numeric,
+        ask_price -> Numeric,
+        bid_volume -> Numeric,
+        ask_volume -> Numeric,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::allow_tables_to_appear_in_same_query!(
+    ohlc_candles,
+    symbols,
+    ticks,
+);

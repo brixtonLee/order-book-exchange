@@ -17,8 +17,9 @@ CREATE TABLE ohlc_candles (
     tick_count BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    -- Composite unique constraint: symbol_id + timeframe + open_time
-    CONSTRAINT ohlc_candles_unique_candle UNIQUE (symbol_id, timeframe, open_time),
+    -- Composite primary key including partition column (required by TimescaleDB)
+    -- Each candle is uniquely identified by symbol_id + timeframe + open_time
+    PRIMARY KEY (symbol_id, timeframe, open_time),
 
     -- Check constraint for valid timeframes
     CONSTRAINT ohlc_candles_timeframe_check

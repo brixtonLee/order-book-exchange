@@ -17,6 +17,13 @@ CREATE INDEX IF NOT EXISTS idx_ticks_hypertable_symbol_time
 CREATE INDEX IF NOT EXISTS idx_ticks_hypertable_name_time
     ON ticks(symbol_name, tick_time DESC, id DESC);
 
+-- Enable compression on the hypertable
+ALTER TABLE ticks SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'symbol_id, symbol_name',
+    timescaledb.compress_orderby = 'tick_time DESC'
+);
+
 -- Set compression policy (compress chunks older than 7 days)
 SELECT add_compression_policy('ticks', INTERVAL '7 days');
 

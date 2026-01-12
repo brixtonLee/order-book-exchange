@@ -13,8 +13,9 @@ CREATE TABLE ticks (
     ask_volume NUMERIC(20, 8) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    -- Composite unique constraint: symbol_id + symbol_name + tick_time
-    CONSTRAINT ticks_unique_tick UNIQUE (symbol_id, symbol_name, tick_time)
+    -- Composite primary key including partition column (required by TimescaleDB)
+    -- Each tick is uniquely identified by symbol_id + symbol_name + tick_time
+    PRIMARY KEY (symbol_id, symbol_name, tick_time)
 );
 
 -- Create indexes (will be optimized after converting to hypertable)

@@ -1,29 +1,19 @@
--- Drop continuous aggregate policies
-SELECT remove_continuous_aggregate_policy('ohlc_1m', if_exists => true);
-SELECT remove_continuous_aggregate_policy('ohlc_5m', if_exists => true);
-SELECT remove_continuous_aggregate_policy('ohlc_15m', if_exists => true);
-SELECT remove_continuous_aggregate_policy('ohlc_30m', if_exists => true);
-SELECT remove_continuous_aggregate_policy('ohlc_1h', if_exists => true);
-SELECT remove_continuous_aggregate_policy('ohlc_4h', if_exists => true);
-SELECT remove_continuous_aggregate_policy('ohlc_1d', if_exists => true);
+-- ⚠️  PLACEHOLDER for continuous aggregates rollback
+--
+-- Since continuous aggregates are created manually outside Diesel migrations,
+-- they must also be dropped manually if needed.
+--
+-- To rollback continuous aggregates, run:
+--   psql postgresql://orderbook:orderbook123@localhost:5433/orderbook_timeseries
+--
+-- Then execute:
+--   DROP MATERIALIZED VIEW IF EXISTS ohlc_1d CASCADE;
+--   DROP MATERIALIZED VIEW IF EXISTS ohlc_4h CASCADE;
+--   DROP MATERIALIZED VIEW IF EXISTS ohlc_1h CASCADE;
+--   DROP MATERIALIZED VIEW IF EXISTS ohlc_30m CASCADE;
+--   DROP MATERIALIZED VIEW IF EXISTS ohlc_15m CASCADE;
+--   DROP MATERIALIZED VIEW IF EXISTS ohlc_5m CASCADE;
+--   DROP MATERIALIZED VIEW IF EXISTS ohlc_1m CASCADE;
+--   DROP FUNCTION IF EXISTS mid_price(NUMERIC, NUMERIC);
 
--- Drop indexes on continuous aggregates
-DROP INDEX IF EXISTS idx_ohlc_1d_symbol_time;
-DROP INDEX IF EXISTS idx_ohlc_4h_symbol_time;
-DROP INDEX IF EXISTS idx_ohlc_1h_symbol_time;
-DROP INDEX IF EXISTS idx_ohlc_30m_symbol_time;
-DROP INDEX IF EXISTS idx_ohlc_15m_symbol_time;
-DROP INDEX IF EXISTS idx_ohlc_5m_symbol_time;
-DROP INDEX IF EXISTS idx_ohlc_1m_symbol_time;
-
--- Drop continuous aggregate materialized views
-DROP MATERIALIZED VIEW IF EXISTS ohlc_1d CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS ohlc_4h CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS ohlc_1h CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS ohlc_30m CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS ohlc_15m CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS ohlc_5m CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS ohlc_1m CASCADE;
-
--- Drop helper function
-DROP FUNCTION IF EXISTS mid_price(NUMERIC, NUMERIC);
+SELECT 1 AS continuous_aggregates_rollback_placeholder;

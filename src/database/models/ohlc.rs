@@ -11,7 +11,7 @@ use utoipa::ToSchema;
 /// Populated by TimescaleDB continuous aggregates
 #[derive(Debug, Clone, Queryable, Selectable, Identifiable, Serialize, Deserialize, ToSchema)]
 #[diesel(table_name = crate::database::schema::ohlc_candles)]
-#[diesel(primary_key(id))]
+#[diesel(primary_key(symbol_id, timeframe, open_time))]
 pub struct OhlcCandle {
     /// Auto-incrementing ID
     pub id: i64,

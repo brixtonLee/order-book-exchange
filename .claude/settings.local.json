@@ -18,7 +18,12 @@
       "Bash(docker volume prune:*)",
       "Bash(docker-compose up:*)",
       "Bash(docker-compose ps:*)",
-      "Bash(docker logs:*)"
+      "Bash(docker logs:*)",
+      "Bash(diesel migration revert:*)",
+      "Bash(diesel migration run:*)",
+      "Bash(psql:*)",
+      "Bash(diesel print-schema:*)",
+      "Bash(src/database/schema.rs)"
     ],
     "deny": [],
     "ask": []

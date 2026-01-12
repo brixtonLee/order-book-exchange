@@ -12,6 +12,13 @@ CREATE INDEX IF NOT EXISTS idx_ohlc_hypertable_symbol_timeframe
 CREATE INDEX IF NOT EXISTS idx_ohlc_hypertable_name_timeframe
     ON ohlc_candles(symbol_name, timeframe, open_time DESC, id DESC);
 
+-- Enable compression on the hypertable
+ALTER TABLE ohlc_candles SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'symbol_id, symbol_name, timeframe',
+    timescaledb.compress_orderby = 'open_time DESC'
+);
+
 -- Set compression policy (compress chunks older than 30 days)
 -- OHLC data is more valuable long-term than raw ticks
 SELECT add_compression_policy('ohlc_candles', INTERVAL '30 days');
