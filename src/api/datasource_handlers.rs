@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::datasource::DatasourceManager;
 use crate::models::datasource::*;
+use super::responses::ErrorResponse;
 
 /// Shared state for datasource endpoints
 pub type DatasourceState = Arc<DatasourceManager>;
@@ -98,11 +99,6 @@ pub async fn get_health(
     Json(manager.get_health().await)
 }
 
-/// Error response for API errors
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
-pub struct ErrorResponse {
-    pub error: String,
-}
 
 /// Datasource-specific errors
 #[derive(Debug)]
@@ -113,25 +109,26 @@ pub enum DatasourceError {
 
 impl IntoResponse for DatasourceError {
     fn into_response(self) -> Response {
-        let (status, error_message) = match self {
+        let (status, error_type, error_message) = match self {
             DatasourceError::StartFailed(msg) => {
                 if msg.contains("Already connected") {
-                    (StatusCode::BAD_REQUEST, msg)
+                    (StatusCode::BAD_REQUEST, "already_connected", msg)
                 } else {
-                    (StatusCode::INTERNAL_SERVER_ERROR, msg)
+                    (StatusCode::INTERNAL_SERVER_ERROR, "start_failed", msg)
                 }
             }
             DatasourceError::StopFailed(msg) => {
                 if msg.contains("No active") {
-                    (StatusCode::BAD_REQUEST, msg)
+                    (StatusCode::BAD_REQUEST, "not_connected", msg)
                 } else {
-                    (StatusCode::INTERNAL_SERVER_ERROR, msg)
+                    (StatusCode::INTERNAL_SERVER_ERROR, "stop_failed", msg)
                 }
             }
         };
 
         let error_response = ErrorResponse {
-            error: error_message,
+            error: error_type.to_string(),
+            message: error_message,
         };
 
         (status, Json(error_response)).into_response()
