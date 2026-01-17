@@ -111,7 +111,7 @@ async fn flush_queue(queue: &Arc<TickQueue>, repository: &Arc<dyn TickRepository
 mod tests {
     use super::*;
     use crate::database::models::NewTick;
-    use async_trait::async_trait;
+    use crate::database::connection::DatabaseError;
     use chrono::Utc;
     use rust_decimal::Decimal;
 
@@ -119,33 +119,41 @@ mod tests {
         pub insert_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl TickRepository for MockRepository {
-        async fn insert_batch(&self, ticks: &[NewTick]) -> Result<usize, String> {
+        fn insert(&self, _new_tick: NewTick) -> Result<crate::database::models::Tick, DatabaseError> {
+            unimplemented!()
+        }
+
+        fn insert_batch(&self, ticks: &[NewTick]) -> Result<usize, DatabaseError> {
             let count = ticks.len();
             self.insert_count.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
             Ok(count)
         }
 
-        async fn get_by_symbol_and_time_range(
+        fn get_by_symbol_and_time_range(
             &self,
             _symbol_id: i64,
             _from: chrono::DateTime<Utc>,
             _to: chrono::DateTime<Utc>,
-            _limit: i64,
-        ) -> Result<Vec<crate::database::models::Tick>, String> {
+            _limit: Option<i64>,
+        ) -> Result<Vec<crate::database::models::Tick>, DatabaseError> {
             unimplemented!()
         }
 
-        async fn get_latest(&self, _symbol_id: i64) -> Result<Option<crate::database::models::Tick>, String> {
+        fn get_latest(&self, _symbol_id: i64) -> Result<Option<crate::database::models::Tick>, DatabaseError> {
             unimplemented!()
         }
 
-        async fn get_latest_all(&self) -> Result<Vec<crate::database::models::Tick>, String> {
+        fn get_latest_all(&self) -> Result<Vec<crate::database::models::Tick>, DatabaseError> {
             unimplemented!()
         }
 
-        async fn delete_before(&self, _before: chrono::DateTime<Utc>) -> Result<usize, String> {
+        fn count_by_symbol(&self, _symbol_id: i64) -> Result<i64, DatabaseError> {
+            unimplemented!()
+        }
+
+        fn delete_before(&self, _before: chrono::DateTime<Utc>) -> Result<usize, DatabaseError> {
             unimplemented!()
         }
     }
