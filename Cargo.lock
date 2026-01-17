@@ -1929,6 +1929,7 @@ dependencies = [
  "futures",
  "hdrhistogram",
  "lapin",
+ "parking_lot",
  "rust_decimal",
  "rust_decimal_macros",
  "serde",

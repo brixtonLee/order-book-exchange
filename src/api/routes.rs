@@ -9,10 +9,11 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::api::database_handlers::DatabaseState;
 use crate::datasource::DatasourceManager;
 use crate::engine::OrderBookEngine;
+use crate::rabbitmq::RabbitMQService;
 use crate::websocket::{websocket_handler, Broadcaster, WsState};
 
 use super::database_handlers::*;
-use super::datasource_handlers::*;
+use super::datasource_handlers::{self, DatasourceState};
 use super::handlers::*;
 use super::openapi::{ApiDocV1, ApiDocV2};
 use super::rabbitmq_handlers::*;
@@ -22,6 +23,7 @@ pub fn create_router(
     engine: Arc<OrderBookEngine>,
     broadcaster: Broadcaster,
     datasource_manager: Arc<DatasourceManager>,
+    rabbitmq_service: Option<Arc<RabbitMQService>>,
     database_state: Option<DatabaseState>,
 ) -> Router {
     // Create WebSocket state
@@ -29,6 +31,12 @@ pub fn create_router(
         broadcaster: broadcaster.clone(),
         engine: engine.clone(),
     });
+
+    // Create datasource state (includes optional RabbitMQ service)
+    let datasource_state = DatasourceState {
+        manager: datasource_manager.clone(),
+        rabbitmq_service: rabbitmq_service.clone(),
+    };
 
     let router = Router::new()
         // Swagger UI with version selection
@@ -49,18 +57,13 @@ pub fn create_router(
         .route("/ws", get(websocket_handler))
         .with_state(ws_state.clone())
         // Health endpoint (uses datasource manager)
-        .route("/api/v1/health", get(get_health))
-        .with_state(datasource_manager.clone())
+        .route("/api/v1/health", get(datasource_handlers::get_health))
+        .with_state(datasource_state.clone())
         // Datasource control endpoints
-        .route("/api/v1/datasource/start", post(start_datasource))
-        .route("/api/v1/datasource/stop", post(stop_datasource))
-        .route("/api/v1/datasource/status", get(get_datasource_status))
-        .with_state(datasource_manager.clone())
-        // RabbitMQ control endpoints
-        .route("/api/v1/rabbitmq/connect", post(connect_rabbitmq))
-        .route("/api/v1/rabbitmq/status", get(get_rabbitmq_status))
-        .route("/api/v1/rabbitmq/disconnect", post(disconnect_rabbitmq))
-        .with_state(datasource_manager.clone())
+        .route("/api/v1/datasource/start", post(datasource_handlers::start_datasource))
+        .route("/api/v1/datasource/stop", post(datasource_handlers::stop_datasource))
+        .route("/api/v1/datasource/status", get(datasource_handlers::get_datasource_status))
+        .with_state(datasource_state)
         // Legacy health check (kept for backwards compatibility)
         .route("/health", get(health_check))
         // Order endpoints
@@ -78,6 +81,20 @@ pub fn create_router(
         // Add state for REST endpoints
         .with_state(engine);
 
+    // Conditionally merge RabbitMQ routes if service is configured
+    let router = if let Some(rmq_service) = rabbitmq_service {
+        let rmq_router = Router::new()
+            // RabbitMQ control endpoints
+            .route("/api/v1/rabbitmq/connect", post(connect_rabbitmq))
+            .route("/api/v1/rabbitmq/status", get(get_rabbitmq_status))
+            .route("/api/v1/rabbitmq/disconnect", post(disconnect_rabbitmq))
+            .with_state(rmq_service);
+
+        router.merge(rmq_router)
+    } else {
+        router
+    };
+
     // Conditionally merge database routes if database is configured
     if let Some(db_state) = database_state {
         let db_router = Router::new()
@@ -91,6 +108,8 @@ pub fn create_router(
             // OHLC endpoints
             .route("/api/v1/ohlc/:symbol_id", get(get_ohlc_candles))
             .route("/api/v1/ohlc/:symbol_id/latest", get(get_latest_ohlc_candle))
+            // Tick queue monitoring
+            .route("/api/v1/database/tick-queue/status", get(get_tick_queue_status))
             .with_state(db_state);
 
         router.merge(db_router)

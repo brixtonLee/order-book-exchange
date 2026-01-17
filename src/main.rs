@@ -1,4 +1,5 @@
 use order_book_api::{create_router, Broadcaster, DatasourceManager, OrderBookEngine};
+use order_book_api::rabbitmq::{RabbitMQService, RabbitMQConfig};
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -25,6 +26,9 @@ async fn main() {
     // Create the datasource manager
     let datasource_manager = Arc::new(DatasourceManager::new(broadcaster.clone()));
 
+    // Create and optionally auto-start RabbitMQ service
+    let rabbitmq_service = initialize_rabbitmq_service().await;
+
     // Initialize database (optional - only if DATABASE_URL is set)
     let database_state = initialize_database(datasource_manager.clone()).await;
 
@@ -34,8 +38,8 @@ async fn main() {
             .await;
     }
 
-    // Create the router with WebSocket support, datasource control, and optional database
-    let app = create_router(engine, broadcaster, datasource_manager, database_state);
+    // Create the router with WebSocket support, datasource control, RabbitMQ, and optional database
+    let app = create_router(engine, broadcaster, datasource_manager, rabbitmq_service, database_state);
 
     // Define the address
     let addr = "127.0.0.1:3000";
@@ -70,7 +74,7 @@ async fn initialize_database(
     datasource_manager: Arc<DatasourceManager>,
 ) -> Option<order_book_api::api::DatabaseState> {
     use order_book_api::database::{
-        establish_connection_pools, repositories::*, TickPersister,
+        establish_connection_pools, repositories::*, TickQueue,
     };
 
     // Check if database URLs are configured
@@ -115,35 +119,33 @@ async fn initialize_database(
     })) as Arc<dyn OhlcRepository>;
 
     // Create tick persister with batching
-    let batch_size = std::env::var("TICK_BATCH_SIZE")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(1000);
+    // Create tick queue for buffered persistence
+    let tick_queue = Arc::new(TickQueue::with_env_config());
 
-    let flush_interval_ms = std::env::var("TICK_FLUSH_INTERVAL_MS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(100);
+    // Create channel wrapper for datasource manager
+    let (tick_tx, mut tick_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let tick_persister = TickPersister::new(tick_repository.clone(), batch_size, flush_interval_ms);
-    let tick_persister_tx = tick_persister.start();
+    // Spawn task to forward ticks from channel to queue
+    let queue_clone = Arc::clone(&tick_queue);
+    tokio::spawn(async move {
+        while let Some(tick) = tick_rx.recv().await {
+            queue_clone.enqueue(tick);
+        }
+    });
 
-    // Attach tick persister to datasource manager
-    datasource_manager
-        .set_tick_persister(tick_persister_tx)
-        .await;
+    // Attach tick channel to datasource manager
+    datasource_manager.set_tick_persister(tick_tx).await;
 
-    tracing::info!(
-        "✅ Tick persister configured (batch_size={}, flush_interval={}ms)",
-        batch_size,
-        flush_interval_ms
-    );
+    tracing::info!("✅ Tick queue configured");
+    tracing::info!("   Max size: {} ticks", tick_queue.stats().max_size);
+    tracing::info!("   Flush: Every 5 minutes (via cron)");
 
     // Create database state for API handlers
     let database_state = order_book_api::api::DatabaseState {
         symbol_repository: symbol_repository.clone(),
         tick_repository: tick_repository.clone(),
         ohlc_repository: ohlc_repository.clone(),
+        tick_queue: Arc::clone(&tick_queue),
     };
 
     tracing::info!("✅ Database integration complete");
@@ -161,7 +163,7 @@ async fn initialize_cron_scheduler(
     database_state: &order_book_api::api::DatabaseState,
     datasource_manager: Arc<DatasourceManager>,
 ) {
-    use order_book_api::jobs::SymbolSyncJob;
+    use order_book_api::jobs::{SymbolSyncJob, create_tick_persistence_job};
     use tokio_cron_scheduler::JobScheduler;
 
     tracing::info!("⏰ Initializing cron scheduler...");
@@ -181,9 +183,21 @@ async fn initialize_cron_scheduler(
         Some(datasource_manager.clone()),
     );
 
-    // Register job
+    // Register symbol sync job
     if let Err(e) = symbol_sync_job.register(&scheduler).await {
         tracing::error!("❌ Failed to register symbol sync job: {}", e);
+        return;
+    }
+
+    // Register tick persistence job
+    if let Err(e) = create_tick_persistence_job(
+        database_state.tick_queue.clone(),
+        database_state.tick_repository.clone(),
+        &scheduler,
+    )
+    .await
+    {
+        tracing::error!("❌ Failed to register tick persistence job: {}", e);
         return;
     }
 
@@ -195,9 +209,76 @@ async fn initialize_cron_scheduler(
 
     tracing::info!("✅ Cron scheduler started successfully");
     tracing::info!("   • Symbol sync: Every 5 minutes");
+    tracing::info!("   • Tick persistence: Every 5 minutes");
 
     // Keep scheduler alive (it will run in the background)
     // The scheduler is automatically cleaned up when the program exits
     std::mem::forget(scheduler);
+}
+
+/// Initialize RabbitMQ service and optionally auto-connect based on environment variables
+async fn initialize_rabbitmq_service() -> Option<Arc<RabbitMQService>> {
+    // Check for RabbitMQ configuration in environment
+    let rabbitmq_uri = std::env::var("RABBITMQ_URI").ok();
+    let auto_start = std::env::var("RABBITMQ_AUTO_START")
+        .ok()
+        .and_then(|v| v.parse::<bool>().ok())
+        .unwrap_or(true); // Default to true if not specified
+
+    if rabbitmq_uri.is_none() {
+        tracing::info!("🐰 RabbitMQ: Not configured (RABBITMQ_URI not set)");
+        return None;
+    }
+
+    // Create RabbitMQ config from environment
+    let config = RabbitMQConfig {
+        uri: rabbitmq_uri.unwrap(),
+        exchange: std::env::var("RABBITMQ_EXCHANGE").unwrap_or_else(|_| "market.data".to_string()),
+        exchange_type: std::env::var("RABBITMQ_EXCHANGE_TYPE")
+            .unwrap_or_else(|_| "topic".to_string()),
+        durable: std::env::var("RABBITMQ_DURABLE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(true),
+        pool_size: std::env::var("RABBITMQ_POOL_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3),
+        connection_timeout_secs: std::env::var("RABBITMQ_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30),
+        publisher_confirms: std::env::var("RABBITMQ_PUBLISHER_CONFIRMS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(true),
+        reconnect: order_book_api::rabbitmq::ReconnectConfig::default(),
+    };
+
+    tracing::info!("🐰 RabbitMQ: Service initialized");
+    tracing::info!("   Exchange: {}", config.exchange);
+    tracing::info!("   Type: {}", config.exchange_type);
+
+    let service = Arc::new(RabbitMQService::new(config));
+
+    // Auto-connect if enabled
+    if auto_start {
+        tracing::info!("🐰 RabbitMQ: Auto-connecting...");
+        match service.connect().await {
+            Ok(_) => {
+                tracing::info!("✅ RabbitMQ: Connected successfully");
+            }
+            Err(e) => {
+                tracing::warn!("⚠️  RabbitMQ: Auto-connect failed: {}", e);
+                tracing::warn!("   Service is available but not connected");
+                tracing::warn!("   Use POST /api/v1/rabbitmq/connect to connect manually");
+            }
+        }
+    } else {
+        tracing::info!("🐰 RabbitMQ: Auto-start disabled");
+        tracing::info!("   Use POST /api/v1/rabbitmq/connect to connect");
+    }
+
+    Some(service)
 }
 

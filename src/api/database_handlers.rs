@@ -17,6 +17,7 @@ pub struct DatabaseState {
     pub symbol_repository: Arc<dyn SymbolRepository>,
     pub tick_repository: Arc<dyn TickRepository>,
     pub ohlc_repository: Arc<dyn OhlcRepository>,
+    pub tick_queue: Arc<crate::database::TickQueue>,
 }
 
 // ============================================================================
@@ -348,4 +349,30 @@ pub async fn get_latest_ohlc_candle(
 #[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct LatestOhlcQueryParams {
     pub timeframe: String,
+}
+
+// ============================================================================
+// Tick Queue Status Endpoint
+// ============================================================================
+
+/// Get tick queue status and statistics
+///
+/// Returns real-time statistics about the tick queue including:
+/// - Current queue size
+/// - Max queue capacity
+/// - Total ticks enqueued (lifetime)
+/// - Total ticks flushed (lifetime)
+/// - Emergency flush count
+#[utoipa::path(
+    get,
+    path = "/api/v1/database/tick-queue/status",
+    tag = "database",
+    responses(
+        (status = 200, description = "Tick queue statistics", body = crate::database::TickQueueStats),
+    )
+)]
+pub async fn get_tick_queue_status(
+    State(state): State<DatabaseState>,
+) -> Json<crate::database::TickQueueStats> {
+    Json(state.tick_queue.stats())
 }
