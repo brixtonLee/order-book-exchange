@@ -36,6 +36,7 @@ pub struct DatasourceManager {
     broadcaster: Broadcaster,
     rabbitmq_publisher: Arc<RwLock<Option<Arc<RabbitMQPublisher>>>>,
     rabbitmq_config: Arc<RwLock<Option<RabbitMQConfig>>>,
+    tick_persister_tx: Arc<RwLock<Option<mpsc::UnboundedSender<MarketTick>>>>,
 }
 
 impl DatasourceManager {
@@ -54,7 +55,14 @@ impl DatasourceManager {
             broadcaster,
             rabbitmq_publisher: Arc::new(RwLock::new(None)),
             rabbitmq_config: Arc::new(RwLock::new(None)),
+            tick_persister_tx: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Set tick persister (called during initialization with database)
+    pub async fn set_tick_persister(&self, tx: mpsc::UnboundedSender<MarketTick>) {
+        *self.tick_persister_tx.write().await = Some(tx);
+        tracing::info!("Tick persister configured for database persistence");
     }
 
     /// Start FIX connection with given configuration
@@ -77,13 +85,10 @@ impl DatasourceManager {
         );
         let bridge = FixToWebSocketBridge::new(self.broadcaster.clone());
 
-        println!("Setup Fix Callbacks");
         self.setup_fix_callbacks(&mut client, &bridge);
 
-        println!("Spawn Connection Tasks");
         let (client_handle, bridge_handle, rabbitmq_handle) = self.spawn_connection_tasks(client, bridge, tick_receiver).await;
 
-        println!("Finalizing COnnectrion");
         self.finalize_connection(client_handle, bridge_handle, rabbitmq_handle).await;
 
         tracing::info!("FIX connection started successfully");
@@ -212,8 +217,9 @@ impl DatasourceManager {
             None
         };
 
-        // Fan-out task: broadcast ticks to both WebSocket and RabbitMQ channels
+        // Fan-out task: broadcast ticks to WebSocket, RabbitMQ, and Database
         let rmq_tx_clone = tick_rx_rmq.as_ref().map(|(tx, _)| tx.clone());
+        let db_tx_clone = self.tick_persister_tx.read().await.clone();
         tokio::spawn(async move {
             let mut receiver = tick_receiver;
             while let Some(tick) = receiver.recv().await {
@@ -222,7 +228,12 @@ impl DatasourceManager {
 
                 // Send to RabbitMQ bridge if enabled
                 if let Some(ref rmq_tx) = rmq_tx_clone {
-                    let _ = rmq_tx.send(tick);
+                    let _ = rmq_tx.send(tick.clone());
+                }
+
+                // Send to database persister if enabled
+                if let Some(ref db_tx) = db_tx_clone {
+                    let _ = db_tx.send(tick);
                 }
             }
         });
@@ -433,6 +444,18 @@ impl DatasourceManager {
     /// Get symbol name from ID
     pub async fn get_symbol_name(&self, symbol_id: &str) -> Option<String> {
         self.symbol_mapping.read().await.get(symbol_id).cloned()
+    }
+
+    /// Get all symbol mappings (for symbol sync job)
+    pub async fn get_symbol_map(&self) -> HashMap<i64, String> {
+        self.symbol_mapping
+            .read()
+            .await
+            .iter()
+            .filter_map(|(id_str, name)| {
+                id_str.parse::<i64>().ok().map(|id| (id, name.clone()))
+            })
+            .collect()
     }
 
     /// Connect to RabbitMQ with given configuration

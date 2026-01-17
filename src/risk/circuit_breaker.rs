@@ -296,7 +296,7 @@ pub enum RiskError {
 mod tests {
     use super::*;
     use crate::models::{OrderSide, OrderType, OrderStatus, TimeInForce};
-    use crate::models::order::SelfTradePreventionMode;
+    use crate::models:: order::SelfTradePreventionMode;
     use rust_decimal_macros::dec;
     use uuid::Uuid;
 

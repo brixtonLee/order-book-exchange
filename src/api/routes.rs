@@ -6,20 +6,23 @@ use std::sync::Arc;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+use crate::api::database_handlers::DatabaseState;
 use crate::datasource::DatasourceManager;
 use crate::engine::OrderBookEngine;
 use crate::websocket::{websocket_handler, Broadcaster, WsState};
 
-use super::handlers::*;
+use super::database_handlers::*;
 use super::datasource_handlers::*;
-use super::rabbitmq_handlers::*;
+use super::handlers::*;
 use super::openapi::{ApiDocV1, ApiDocV2};
+use super::rabbitmq_handlers::*;
 
 /// Create the API router with Swagger UI and WebSocket support
 pub fn create_router(
     engine: Arc<OrderBookEngine>,
     broadcaster: Broadcaster,
     datasource_manager: Arc<DatasourceManager>,
+    database_state: Option<DatabaseState>,
 ) -> Router {
     // Create WebSocket state
     let ws_state = Arc::new(WsState {
@@ -27,7 +30,7 @@ pub fn create_router(
         engine: engine.clone(),
     });
 
-    Router::new()
+    let router = Router::new()
         // Swagger UI with version selection
         .merge(
             SwaggerUi::new("/swagger-ui")
@@ -73,5 +76,25 @@ pub fn create_router(
         .route("/api/v1/metrics/exchange", get(get_exchange_metrics))
         .route("/api/v1/orderbook/:symbol/microstructure", get(get_microstructure_metrics))
         // Add state for REST endpoints
-        .with_state(engine)
+        .with_state(engine);
+
+    // Conditionally merge database routes if database is configured
+    if let Some(db_state) = database_state {
+        let db_router = Router::new()
+            // Symbol endpoints
+            .route("/api/v1/symbols", get(get_symbols))
+            .route("/api/v1/symbols/:symbol_id", get(get_symbol_by_id))
+            .route("/api/v1/symbols/name/:symbol_name", get(get_symbol_by_name))
+            // Tick endpoints
+            .route("/api/v1/ticks/:symbol_id", get(get_ticks))
+            .route("/api/v1/ticks/:symbol_id/latest", get(get_latest_tick))
+            // OHLC endpoints
+            .route("/api/v1/ohlc/:symbol_id", get(get_ohlc_candles))
+            .route("/api/v1/ohlc/:symbol_id/latest", get(get_latest_ohlc_candle))
+            .with_state(db_state);
+
+        router.merge(db_router)
+    } else {
+        router
+    }
 }
