@@ -8,6 +8,14 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use crate::rabbitmq::{RabbitMQService, RabbitMQConfig, BridgeStats};
+use crate::market_data::TickDistributor;
+
+/// State for RabbitMQ handlers (includes both service and distributor)
+#[derive(Clone)]
+pub struct RabbitMQState {
+    pub service: Arc<RabbitMQService>,
+    pub tick_distributor: Arc<TickDistributor>,
+}
 
 /// RabbitMQ connection request
 #[derive(Debug, Deserialize, ToSchema)]
@@ -48,16 +56,20 @@ pub struct RabbitMQStatusResponse {
     tag = "RabbitMQ"
 )]
 pub async fn connect_rabbitmq(
-    State(rabbitmq_service): State<Arc<RabbitMQService>>,
+    State(state): State<RabbitMQState>,
     Json(_request): Json<RabbitMQConnectRequest>,
 ) -> Result<Json<RabbitMQConnectResponse>, StatusCode> {
     // Note: This endpoint receives a new config but we can't change the service config at runtime
     // The service should be initialized with config from environment variables
     // For now, we'll just attempt to connect with the existing service
-    match rabbitmq_service.connect().await {
+
+    // Register with TickDistributor to get tick receiver
+    let tick_rx = state.tick_distributor.register_consumer("rabbitmq".to_string());
+
+    match state.service.connect(tick_rx).await {
         Ok(_) => Ok(Json(RabbitMQConnectResponse {
             success: true,
-            message: "Successfully connected to RabbitMQ".to_string(),
+            message: "Successfully connected to RabbitMQ and registered with TickDistributor".to_string(),
         })),
         Err(e) => {
             tracing::error!("Failed to connect to RabbitMQ: {}", e);
@@ -81,14 +93,14 @@ pub async fn connect_rabbitmq(
     tag = "RabbitMQ"
 )]
 pub async fn get_rabbitmq_status(
-    State(rabbitmq_service): State<Arc<RabbitMQService>>,
+    State(state): State<RabbitMQState>,
 ) -> Json<RabbitMQStatusResponse> {
-    let connected = rabbitmq_service.is_connected();
-    let stats = rabbitmq_service.stats().await;
+    let connected = state.service.is_connected();
+    let stats = state.service.stats().await;
 
     // Get exchange name from service
     let exchange = if connected {
-        Some(rabbitmq_service.get_exchange())
+        Some(state.service.get_exchange())
     } else {
         None
     };
@@ -113,9 +125,9 @@ pub async fn get_rabbitmq_status(
     tag = "RabbitMQ"
 )]
 pub async fn disconnect_rabbitmq(
-    State(rabbitmq_service): State<Arc<RabbitMQService>>,
+    State(state): State<RabbitMQState>,
 ) -> Json<RabbitMQConnectResponse> {
-    match rabbitmq_service.disconnect().await {
+    match state.service.disconnect().await {
         Ok(_) => Json(RabbitMQConnectResponse {
             success: true,
             message: "Successfully disconnected from RabbitMQ".to_string(),

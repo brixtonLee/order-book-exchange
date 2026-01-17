@@ -1,5 +1,7 @@
 use axum::{
+    extract::State,
     routing::{delete, get, post},
+    Json,
     Router,
 };
 use std::sync::Arc;
@@ -19,7 +21,7 @@ use super::database_handlers::*;
 use super::datasource_handlers::{self, DatasourceState};
 use super::handlers::*;
 use super::openapi::{ApiDocV1, ApiDocV2};
-use super::rabbitmq_handlers::*;
+use super::rabbitmq_handlers::{self, RabbitMQState};
 
 /// Create the API router with Swagger UI, WebSocket support, and TickDistributor
 pub fn create_router(
@@ -88,13 +90,18 @@ pub fn create_router(
         .with_state(engine);
 
     // Conditionally merge RabbitMQ routes if service is configured
-    let router = if let Some(rmq_service) = rabbitmq_service {
+    let router = if let (Some(rmq_service), Some(distributor)) = (rabbitmq_service, tick_distributor.clone()) {
+        let rmq_state = RabbitMQState {
+            service: rmq_service,
+            tick_distributor: distributor,
+        };
+
         let rmq_router = Router::new()
             // RabbitMQ control endpoints
-            .route("/api/v1/rabbitmq/connect", post(connect_rabbitmq))
-            .route("/api/v1/rabbitmq/status", get(get_rabbitmq_status))
-            .route("/api/v1/rabbitmq/disconnect", post(disconnect_rabbitmq))
-            .with_state(rmq_service);
+            .route("/api/v1/rabbitmq/connect", post(rabbitmq_handlers::connect_rabbitmq))
+            .route("/api/v1/rabbitmq/status", get(rabbitmq_handlers::get_rabbitmq_status))
+            .route("/api/v1/rabbitmq/disconnect", post(rabbitmq_handlers::disconnect_rabbitmq))
+            .with_state(rmq_state);
 
         router.merge(rmq_router)
     } else {
@@ -102,7 +109,7 @@ pub fn create_router(
     };
 
     // Conditionally merge database routes if database is configured
-    if let Some(db_state) = database_state {
+    let router = if let Some(db_state) = database_state {
         let db_router = Router::new()
             // Symbol endpoints
             .route("/api/v1/symbols", get(get_symbols))
