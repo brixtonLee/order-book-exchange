@@ -116,6 +116,8 @@ src/
 ├── jobs/                   # Cron jobs and scheduled tasks
 │   ├── symbol_sync_job.rs  # Symbol sync (every 5 minutes)
 │   └── tick_persistence_job.rs  # Tick persistence (every 5 minutes)
+├── market_data/            # Market data distribution (pub/sub pattern)
+│   └── tick_distributor.rs # TickDistributor - centralized tick broadcasting
 ├── metrics/                # Market metrics calculation
 │   └── spread.rs           # Spread calculations (abs, %, bps)
 └── utils/                  # Shared utilities
@@ -145,6 +147,28 @@ Uses `rust_decimal::Decimal` throughout instead of `f64` to avoid floating-point
 #### WebSocket Broadcasting
 The `Broadcaster` uses `DashMap` for concurrent subscriber management and `tokio::sync::mpsc` channels for message distribution to connected clients.
 
+#### Centralized Tick Distribution
+The `TickDistributor` implements a pub/sub pattern for market data distribution:
+
+**Architecture:**
+- **Single Input**: Receives ticks from FIX client via one `mpsc::unbounded_channel`
+- **Multiple Outputs**: Broadcasts to registered consumers (WebSocket, RabbitMQ, TickQueue)
+- **Dynamic Registration**: Consumers register at startup with `register_consumer(name)`
+- **Decoupled Design**: Consumers don't know about each other, easy to extend
+
+**Benefits:**
+- **Single source of truth**: Centralized tick flow management
+- **Easy to extend**: Add new consumers without modifying existing code
+- **Centralized metrics**: Monitor tick throughput at one point
+- **Monitoring**: `/api/v1/market-data/distributor/status` endpoint
+
+**Flow:**
+```
+FIX Client → TickDistributor → [websocket_rx] → WebSocket Bridge → WebSocket Clients
+                              → [rabbitmq_rx]  → RabbitMQ Service → RabbitMQ Broker
+                              → [queue_rx]     → Tick Queue → TimescaleDB (every 5 min)
+```
+
 ## cTrader FIX Protocol Integration
 
 The `ctrader_fix` module implements FIX 4.4 protocol support for connecting to cTrader market data feeds:
@@ -169,6 +193,7 @@ See `CTRADER_FIX_STREAMING.md` for detailed integration guide and WebSocket-like
 - `GET /api/v1/orderbook/{symbol}/spread` - Spread metrics
 - `GET /api/v1/trades/{symbol}?limit=N` - Recent trades
 - `GET /api/v1/metrics/exchange` - Exchange-wide metrics
+- `GET /api/v1/market-data/distributor/status` - TickDistributor statistics (consumer count, total distributed)
 
 ### Real-Time
 - `WS /ws` - WebSocket endpoint for live order book and trade updates

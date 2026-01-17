@@ -11,6 +11,9 @@ use crate::datasource::DatasourceManager;
 use crate::engine::OrderBookEngine;
 use crate::rabbitmq::RabbitMQService;
 use crate::websocket::{websocket_handler, Broadcaster, WsState};
+use crate::market_data::TickDistributor;
+use crate::ctrader_fix::market_data::MarketTick;
+use tokio::sync::mpsc;
 
 use super::database_handlers::*;
 use super::datasource_handlers::{self, DatasourceState};
@@ -18,13 +21,15 @@ use super::handlers::*;
 use super::openapi::{ApiDocV1, ApiDocV2};
 use super::rabbitmq_handlers::*;
 
-/// Create the API router with Swagger UI and WebSocket support
+/// Create the API router with Swagger UI, WebSocket support, and TickDistributor
 pub fn create_router(
     engine: Arc<OrderBookEngine>,
     broadcaster: Broadcaster,
     datasource_manager: Arc<DatasourceManager>,
     rabbitmq_service: Option<Arc<RabbitMQService>>,
     database_state: Option<DatabaseState>,
+    tick_distributor: Option<Arc<TickDistributor>>,
+    tick_distributor_tx: Option<mpsc::UnboundedSender<MarketTick>>,
 ) -> Router {
     // Create WebSocket state
     let ws_state = Arc::new(WsState {
@@ -32,10 +37,11 @@ pub fn create_router(
         engine: engine.clone(),
     });
 
-    // Create datasource state (includes optional RabbitMQ service)
+    // Create datasource state (includes optional RabbitMQ service and tick distributor tx)
     let datasource_state = DatasourceState {
         manager: datasource_manager.clone(),
         rabbitmq_service: rabbitmq_service.clone(),
+        tick_distributor_tx: tick_distributor_tx.clone(),
     };
 
     let router = Router::new()
@@ -115,5 +121,31 @@ pub fn create_router(
         router.merge(db_router)
     } else {
         router
+    };
+
+    // Conditionally add TickDistributor monitoring endpoint
+    if let Some(distributor) = tick_distributor {
+        let distributor_router = Router::new()
+            .route("/api/v1/market-data/distributor/status", get(get_distributor_status))
+            .with_state(distributor);
+
+        router.merge(distributor_router)
+    } else {
+        router
     }
+}
+
+/// Get TickDistributor status and statistics
+#[utoipa::path(
+    get,
+    path = "/api/v1/market-data/distributor/status",
+    tag = "market-data",
+    responses(
+        (status = 200, description = "Distributor statistics", body = crate::market_data::TickDistributorStats),
+    )
+)]
+async fn get_distributor_status(
+    State(distributor): State<Arc<TickDistributor>>,
+) -> Json<crate::market_data::TickDistributorStats> {
+    Json(distributor.get_stats())
 }

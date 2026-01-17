@@ -1,8 +1,7 @@
-use crate::ctrader_fix::{CTraderFixClient, FixToWebSocketBridge};
+use crate::ctrader_fix::CTraderFixClient;
 use crate::ctrader_fix::market_data::MarketTick;
 use crate::models::datasource::*;
 use crate::websocket::broadcaster::Broadcaster;
-use crate::rabbitmq::RabbitMQService;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -35,7 +34,6 @@ pub struct DatasourceManager {
     subscribed_symbols: Arc<RwLock<Vec<SymbolData>>>,
     symbol_mapping: Arc<RwLock<HashMap<String, String>>>,
     broadcaster: Broadcaster,
-    tick_persister_tx: Arc<RwLock<Option<mpsc::UnboundedSender<MarketTick>>>>,
 }
 
 impl DatasourceManager {
@@ -51,23 +49,16 @@ impl DatasourceManager {
             subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
             symbol_mapping: Arc::new(RwLock::new(HashMap::new())),
             broadcaster,
-            tick_persister_tx: Arc::new(RwLock::new(None)),
         }
-    }
-
-    /// Set tick persister (called during initialization with database)
-    pub async fn set_tick_persister(&self, tx: mpsc::UnboundedSender<MarketTick>) {
-        *self.tick_persister_tx.write().await = Some(tx);
-        tracing::info!("Tick persister configured for database persistence");
     }
 
     /// Start FIX connection with given configuration
     ///
-    /// Optionally accepts a RabbitMQService for tick streaming to RabbitMQ
+    /// Accepts a tick distributor sender for centralized tick broadcasting
     pub async fn start_live_fix(
         &self,
         config: FixConfig,
-        rabbitmq_service: Option<Arc<RabbitMQService>>,
+        tick_distributor_tx: mpsc::UnboundedSender<MarketTick>,
     ) -> Result<(), String> {
         self.validate_connection_state().await?;
 
@@ -85,18 +76,16 @@ impl DatasourceManager {
             config.credentials.username.clone(),
             config.credentials.password.clone(),
         );
-        let bridge = FixToWebSocketBridge::new(self.broadcaster.clone());
 
-        self.setup_fix_callbacks(&mut client, &bridge);
+        self.setup_fix_callbacks(&mut client);
 
-        let (client_handle, bridge_handle) = self.spawn_connection_tasks(
+        let (client_handle, forward_handle) = self.spawn_connection_tasks(
             client,
-            bridge,
             tick_receiver,
-            rabbitmq_service,
+            tick_distributor_tx,
         ).await;
 
-        self.finalize_connection(client_handle, bridge_handle).await;
+        self.finalize_connection(client_handle, forward_handle).await;
 
         tracing::info!("FIX connection started successfully");
         Ok(())
@@ -121,9 +110,9 @@ impl DatasourceManager {
     }
 
     /// Setup FIX client callbacks (heartbeat and security list)
-    fn setup_fix_callbacks(&self, client: &mut CTraderFixClient, bridge: &FixToWebSocketBridge) {
+    fn setup_fix_callbacks(&self, client: &mut CTraderFixClient) {
         self.setup_heartbeat_callback(client);
-        self.setup_security_list_callback(client, bridge);
+        self.setup_security_list_callback(client);
     }
 
     /// Setup heartbeat callback to track connection health
@@ -143,10 +132,9 @@ impl DatasourceManager {
     }
 
     /// Setup security list callback to populate symbol mappings
-    fn setup_security_list_callback(&self, client: &mut CTraderFixClient, bridge: &FixToWebSocketBridge) {
+    fn setup_security_list_callback(&self, client: &mut CTraderFixClient) {
         let subscribed_symbols = Arc::clone(&self.subscribed_symbols);
         let symbol_mapping = Arc::clone(&self.symbol_mapping);
-        let bridge_symbol_map = bridge.get_symbol_map();
 
         client.set_security_list_callback(Arc::new(move |symbols: Vec<SymbolData>| {
             tracing::info!("Received {} symbols from Security List Response", symbols.len());
@@ -154,8 +142,7 @@ impl DatasourceManager {
             let mapping = Self::build_symbol_mapping(&symbols);
 
             Self::update_subscribed_symbols(&subscribed_symbols, symbols);
-            Self::update_symbol_mapping(&symbol_mapping, mapping.clone());
-            Self::update_bridge_symbol_mapping(&bridge_symbol_map, mapping);
+            Self::update_symbol_mapping(&symbol_mapping, mapping);
         }));
     }
 
@@ -187,30 +174,14 @@ impl DatasourceManager {
         }
     }
 
-    /// Update bridge symbol mapping asynchronously
-    fn update_bridge_symbol_mapping(
-        bridge_symbol_map: &Arc<RwLock<HashMap<String, String>>>,
-        mapping: HashMap<String, String>,
-    ) {
-        let bridge_map = Arc::clone(bridge_symbol_map);
-        tokio::spawn(async move {
-            let mut bridge_map = bridge_map.write().await;
-            for (id, name) in mapping {
-                bridge_map.insert(id, name);
-            }
-            tracing::info!("Updated bridge symbol mappings");
-        });
-    }
-
-    /// Spawn FIX client and bridge tasks
+    /// Spawn FIX client task and forward ticks to distributor
     ///
-    /// Accepts optional RabbitMQService for tick streaming to RabbitMQ
+    /// Simplified: sends ticks to TickDistributor which handles broadcasting
     async fn spawn_connection_tasks(
         &self,
         mut client: CTraderFixClient,
-        bridge: FixToWebSocketBridge,
         tick_receiver: mpsc::UnboundedReceiver<MarketTick>,
-        rabbitmq_service: Option<Arc<RabbitMQService>>,
+        tick_distributor_tx: mpsc::UnboundedSender<MarketTick>,
     ) -> (JoinHandle<()>, JoinHandle<()>) {
         let client_handle = tokio::spawn(async move {
             if let Err(e) = client.connect_and_run().await {
@@ -218,52 +189,26 @@ impl DatasourceManager {
             }
         });
 
-        // Create channel for WebSocket bridge
-        let (tick_tx, tick_rx_ws) = mpsc::unbounded_channel();
-
-        // Get RabbitMQ service tick sender if available
-        let rmq_tx = rabbitmq_service.as_ref().and_then(|service| service.get_tick_sender());
-
-        // Get database persister sender if available
-        let db_tx_clone = self.tick_persister_tx.read().await.clone();
-
-        // Share symbol mapping with RabbitMQ service if enabled
-        if let Some(ref service) = rabbitmq_service {
-            let symbol_mapping = self.symbol_mapping.read().await.clone();
-            service.update_symbol_mappings(symbol_mapping).await;
-        }
-
-        // Fan-out task: broadcast ticks to WebSocket, RabbitMQ, and Database
-        tokio::spawn(async move {
+        // Forward ticks from FIX client to TickDistributor
+        // TickDistributor handles broadcasting to all consumers (WebSocket, RabbitMQ, TickQueue)
+        let forward_handle = tokio::spawn(async move {
             let mut receiver = tick_receiver;
             while let Some(tick) = receiver.recv().await {
-                // Send to WebSocket bridge
-                let _ = tick_tx.send(tick.clone());
-
-                // Send to RabbitMQ service if enabled
-                if let Some(ref rmq_sender) = rmq_tx {
-                    let _ = rmq_sender.send(tick.clone());
-                }
-
-                // Send to database persister if enabled
-                if let Some(ref db_tx) = db_tx_clone {
-                    let _ = db_tx.send(tick);
+                if let Err(e) = tick_distributor_tx.send(tick) {
+                    tracing::error!("Failed to send tick to distributor: {}", e);
+                    break;
                 }
             }
+            tracing::warn!("Tick forwarding task ended");
         });
 
-        // Spawn WebSocket bridge task
-        let bridge_handle = tokio::spawn(async move {
-            bridge.run(tick_rx_ws).await;
-        });
-
-        (client_handle, bridge_handle)
+        (client_handle, forward_handle)
     }
 
     /// Store task handles and update connection mode
-    async fn finalize_connection(&self, client_handle: JoinHandle<()>, bridge_handle: JoinHandle<()>) {
+    async fn finalize_connection(&self, client_handle: JoinHandle<()>, forward_handle: JoinHandle<()>) {
         *self.fix_client_handle.write().await = Some(client_handle);
-        *self.bridge_handle.write().await = Some(bridge_handle);
+        *self.bridge_handle.write().await = Some(forward_handle);
         *self.mode.write().await = DatasourceMode::Connected;
     }
 

@@ -18,9 +18,6 @@ pub struct RabbitMQService {
     /// Symbol mapping shared with DatasourceManager
     symbol_map: Arc<RwLock<HashMap<String, String>>>,
 
-    /// Channel sender for tick ingestion
-    tick_sender: Arc<RwLock<Option<mpsc::UnboundedSender<MarketTick>>>>,
-
     /// Background task handle
     task_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
 
@@ -36,7 +33,6 @@ impl RabbitMQService {
         Self {
             publisher,
             symbol_map: Arc::new(RwLock::new(HashMap::new())),
-            tick_sender: Arc::new(RwLock::new(None)),
             task_handle: Arc::new(RwLock::new(None)),
             is_running: Arc::new(AtomicBool::new(false)),
         }
@@ -47,13 +43,10 @@ impl RabbitMQService {
         Arc::clone(&self.symbol_map)
     }
 
-    /// Get the tick sender for fan-out from DatasourceManager
-    pub fn get_tick_sender(&self) -> Option<mpsc::UnboundedSender<MarketTick>> {
-        self.tick_sender.blocking_read().clone()
-    }
-
-    /// Connect to RabbitMQ and start the service
-    pub async fn connect(&self) -> Result<(), String> {
+    /// Connect to RabbitMQ and start consuming ticks from distributor
+    ///
+    /// Accepts a tick receiver from TickDistributor for consuming market ticks
+    pub async fn connect(&self, tick_rx: mpsc::UnboundedReceiver<MarketTick>) -> Result<(), String> {
         // Check if already running
         if self.is_running.load(Ordering::Acquire) {
             return Err("RabbitMQ service is already running".to_string());
@@ -62,9 +55,6 @@ impl RabbitMQService {
         // Connect publisher
         self.publisher.connect().await
             .map_err(|e| format!("Failed to connect to RabbitMQ: {}", e))?;
-
-        // Create tick channel
-        let (tick_tx, tick_rx) = mpsc::unbounded_channel();
 
         // Create bridge with publisher
         let bridge = FixToRabbitMQBridge::new(Arc::clone(&self.publisher));
@@ -75,10 +65,7 @@ impl RabbitMQService {
             bridge.update_symbol_mappings(service_symbol_map.clone()).await;
         }
 
-        // Store tick sender
-        *self.tick_sender.write().await = Some(tick_tx);
-
-        // Spawn background task to run the bridge
+        // Spawn background task to run the bridge (consumes ticks from TickDistributor)
         let is_running = Arc::clone(&self.is_running);
         let handle = tokio::spawn(async move {
             is_running.store(true, Ordering::Release);
@@ -97,9 +84,6 @@ impl RabbitMQService {
         if !self.is_running.load(Ordering::Acquire) {
             return Err("RabbitMQ service is not running".to_string());
         }
-
-        // Drop the tick sender to stop the bridge loop
-        *self.tick_sender.write().await = None;
 
         // Abort the background task
         if let Some(handle) = self.task_handle.write().await.take() {
@@ -165,7 +149,6 @@ mod tests {
         let service = RabbitMQService::new(config);
 
         assert!(!service.is_connected());
-        assert!(service.get_tick_sender().is_none());
     }
 
     #[tokio::test]

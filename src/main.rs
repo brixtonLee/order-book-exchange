@@ -1,5 +1,7 @@
 use order_book_api::{create_router, Broadcaster, DatasourceManager, OrderBookEngine};
 use order_book_api::rabbitmq::{RabbitMQService, RabbitMQConfig};
+use order_book_api::market_data::TickDistributor;
+use order_book_api::ctrader_fix::FixToWebSocketBridge;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -26,11 +28,27 @@ async fn main() {
     // Create the datasource manager
     let datasource_manager = Arc::new(DatasourceManager::new(broadcaster.clone()));
 
-    // Create and optionally auto-start RabbitMQ service
-    let rabbitmq_service = initialize_rabbitmq_service().await;
+    // Create centralized tick distributor
+    let (tick_distributor, tick_distributor_tx) = TickDistributor::new();
+    let tick_distributor = Arc::new(tick_distributor);
+
+    tracing::info!("📡 TickDistributor created");
+
+    // Create and start WebSocket bridge (registers with distributor)
+    let ws_bridge = FixToWebSocketBridge::new(broadcaster.clone());
+    let ws_rx = tick_distributor.register_consumer("websocket".to_string());
+    let _ws_bridge_handle = tokio::spawn(async move {
+        ws_bridge.run(ws_rx).await;
+    });
+
+    tracing::info!("📡 WebSocket bridge registered with TickDistributor");
+
+    // Create and optionally auto-start RabbitMQ service (registers with distributor)
+    let rabbitmq_service = initialize_rabbitmq_service(tick_distributor.clone()).await;
 
     // Initialize database (optional - only if DATABASE_URL is set)
-    let database_state = initialize_database(datasource_manager.clone()).await;
+    // Registers tick queue with distributor
+    let database_state = initialize_database(tick_distributor.clone()).await;
 
     // Initialize cron scheduler (only if database is enabled)
     if database_state.is_some() {
@@ -38,8 +56,20 @@ async fn main() {
             .await;
     }
 
-    // Create the router with WebSocket support, datasource control, RabbitMQ, and optional database
-    let app = create_router(engine, broadcaster, datasource_manager, rabbitmq_service, database_state);
+    // Start the TickDistributor broadcast loop
+    tick_distributor.start();
+    tracing::info!("📡 TickDistributor broadcast loop started");
+
+    // Create the router with WebSocket support, datasource control, RabbitMQ, database, and tick distributor
+    let app = create_router(
+        engine,
+        broadcaster,
+        datasource_manager,
+        rabbitmq_service,
+        database_state,
+        Some(tick_distributor.clone()),
+        Some(tick_distributor_tx),
+    );
 
     // Define the address
     let addr = "127.0.0.1:3000";
@@ -70,8 +100,10 @@ async fn main() {
 }
 
 /// Initialize database connection pools and repositories
+///
+/// Registers tick queue with TickDistributor for market data persistence
 async fn initialize_database(
-    datasource_manager: Arc<DatasourceManager>,
+    tick_distributor: Arc<TickDistributor>,
 ) -> Option<order_book_api::api::DatabaseState> {
     use order_book_api::database::{
         establish_connection_pools, repositories::*, TickQueue,
@@ -118,25 +150,21 @@ async fn initialize_database(
         pools_clone.get_timeseries_conn()
     })) as Arc<dyn OhlcRepository>;
 
-    // Create tick persister with batching
     // Create tick queue for buffered persistence
     let tick_queue = Arc::new(TickQueue::with_env_config());
 
-    // Create channel wrapper for datasource manager
-    let (tick_tx, mut tick_rx) = tokio::sync::mpsc::unbounded_channel();
+    // Register tick queue with TickDistributor
+    let mut queue_rx = tick_distributor.register_consumer("tick_queue".to_string());
 
-    // Spawn task to forward ticks from channel to queue
+    // Spawn task to forward ticks from distributor to queue
     let queue_clone = Arc::clone(&tick_queue);
     tokio::spawn(async move {
-        while let Some(tick) = tick_rx.recv().await {
+        while let Some(tick) = queue_rx.recv().await {
             queue_clone.enqueue(tick);
         }
     });
 
-    // Attach tick channel to datasource manager
-    datasource_manager.set_tick_persister(tick_tx).await;
-
-    tracing::info!("✅ Tick queue configured");
+    tracing::info!("✅ Tick queue configured and registered with TickDistributor");
     tracing::info!("   Max size: {} ticks", tick_queue.stats().max_size);
     tracing::info!("   Flush: Every 5 minutes (via cron)");
 
@@ -217,7 +245,11 @@ async fn initialize_cron_scheduler(
 }
 
 /// Initialize RabbitMQ service and optionally auto-connect based on environment variables
-async fn initialize_rabbitmq_service() -> Option<Arc<RabbitMQService>> {
+///
+/// Registers with TickDistributor for receiving market ticks
+async fn initialize_rabbitmq_service(
+    tick_distributor: Arc<TickDistributor>,
+) -> Option<Arc<RabbitMQService>> {
     // Check for RabbitMQ configuration in environment
     let rabbitmq_uri = std::env::var("RABBITMQ_URI").ok();
     let auto_start = std::env::var("RABBITMQ_AUTO_START")
@@ -264,9 +296,13 @@ async fn initialize_rabbitmq_service() -> Option<Arc<RabbitMQService>> {
     // Auto-connect if enabled
     if auto_start {
         tracing::info!("🐰 RabbitMQ: Auto-connecting...");
-        match service.connect().await {
+
+        // Register with TickDistributor
+        let rabbitmq_rx = tick_distributor.register_consumer("rabbitmq".to_string());
+
+        match service.connect(rabbitmq_rx).await {
             Ok(_) => {
-                tracing::info!("✅ RabbitMQ: Connected successfully");
+                tracing::info!("✅ RabbitMQ: Connected and registered with TickDistributor");
             }
             Err(e) => {
                 tracing::warn!("⚠️  RabbitMQ: Auto-connect failed: {}", e);
@@ -276,6 +312,7 @@ async fn initialize_rabbitmq_service() -> Option<Arc<RabbitMQService>> {
         }
     } else {
         tracing::info!("🐰 RabbitMQ: Auto-start disabled");
+        tracing::info!("   Note: Manual connection requires access to TickDistributor");
         tracing::info!("   Use POST /api/v1/rabbitmq/connect to connect");
     }
 

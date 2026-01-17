@@ -12,6 +12,7 @@ pub mod datasource;
 pub mod disruptor;
 pub mod engine;
 pub mod jobs;
+pub mod market_data;
 pub mod metrics;
 pub mod models;
 pub mod persistence;
