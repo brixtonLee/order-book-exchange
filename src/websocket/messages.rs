@@ -32,7 +32,7 @@ pub enum WsMessage {
     },
     /// Ticker update (best bid/ask)
     Ticker {
-        symbol: String,
+        symbol_id: String,
         best_bid: Option<Decimal>,
         best_ask: Option<Decimal>,
         spread: Option<Decimal>,
@@ -143,7 +143,7 @@ pub struct TickerUpdate {
 impl TickerUpdate {
     pub fn to_ws_message(&self) -> WsMessage {
         WsMessage::Ticker {
-            symbol: self.symbol.clone(),
+            symbol_id: self.symbol.clone(),
             best_bid: self.best_bid,
             best_ask: self.best_ask,
             spread: self.spread,

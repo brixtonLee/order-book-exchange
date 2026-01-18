@@ -26,7 +26,7 @@ async fn main() {
     let broadcaster = Broadcaster::new();
 
     // Create the datasource manager
-    let datasource_manager = Arc::new(DatasourceManager::new(broadcaster.clone()));
+    let datasource_manager = Arc::new(DatasourceManager::new());
 
     // Create centralized tick distributor
     let (tick_distributor, tick_distributor_tx) = TickDistributor::new();

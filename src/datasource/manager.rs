@@ -1,9 +1,7 @@
 use crate::ctrader_fix::CTraderFixClient;
 use crate::ctrader_fix::market_data::MarketTick;
 use crate::models::datasource::*;
-use crate::websocket::broadcaster::Broadcaster;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 
@@ -25,30 +23,22 @@ use crate::ctrader_fix::symbol_data::symbol_parser::SymbolData;
 ///
 /// RabbitMQ integration has been extracted to RabbitMQService (independent lifecycle)
 pub struct DatasourceManager {
-    mode: Arc<RwLock<DatasourceMode>>,
     fix_client_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
-    bridge_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
-    fix_config: Arc<RwLock<Option<FixConfig>>>,
-    heartbeat_counter: Arc<AtomicU64>,
+    distributor_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
     connection_metrics: Arc<RwLock<Option<ConnectionMetrics>>>,
     subscribed_symbols: Arc<RwLock<Vec<SymbolData>>>,
     symbol_mapping: Arc<RwLock<HashMap<String, String>>>,
-    broadcaster: Broadcaster,
 }
 
 impl DatasourceManager {
     /// Create a new datasource manager
-    pub fn new(broadcaster: Broadcaster) -> Self {
+    pub fn new() -> Self {
         Self {
-            mode: Arc::new(RwLock::new(DatasourceMode::Disconnected)),
             fix_client_handle: Arc::new(RwLock::new(None)),
-            bridge_handle: Arc::new(RwLock::new(None)),
-            fix_config: Arc::new(RwLock::new(None)),
-            heartbeat_counter: Arc::new(AtomicU64::new(0)),
+            distributor_handle: Arc::new(RwLock::new(None)),
             connection_metrics: Arc::new(RwLock::new(None)),
             subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
-            symbol_mapping: Arc::new(RwLock::new(HashMap::new())),
-            broadcaster,
+            symbol_mapping: Arc::new(RwLock::new(HashMap::new()))
         }
     }
 
@@ -64,17 +54,10 @@ impl DatasourceManager {
 
         tracing::info!("Starting FIX connection to {}:{}", config.host, config.port);
 
-        self.reset_connection_state(&config).await;
+        self.reset_connection_state().await;
 
         let (mut client, tick_receiver) = CTraderFixClient::with_tick_channel(
-            config.host.clone(),
-            config.port,
-            config.credentials.sender_comp_id.clone(),
-            config.credentials.target_comp_id.clone(),
-            config.credentials.sender_sub_id.clone(),
-            config.credentials.target_sub_id.clone(),
-            config.credentials.username.clone(),
-            config.credentials.password.clone(),
+            config
         );
 
         self.setup_fix_callbacks(&mut client);
@@ -92,18 +75,16 @@ impl DatasourceManager {
     }
 
     /// Validate that we're not already connected
+    /// The * tries to dereference and move the Vec out of the guard
     async fn validate_connection_state(&self) -> Result<(), String> {
-        let current_mode = *self.mode.read().await;
-        if current_mode == DatasourceMode::Connected {
+        if !self.subscribed_symbols.read().await.is_empty() {
             return Err("Already connected to FIX server".to_string());
         }
         Ok(())
     }
 
     /// Reset connection state and store new configuration
-    async fn reset_connection_state(&self, config: &FixConfig) {
-        *self.fix_config.write().await = Some(config.clone());
-        self.heartbeat_counter.store(0, Ordering::Relaxed);
+    async fn reset_connection_state(&self) {
         *self.connection_metrics.write().await = Some(ConnectionMetrics::new());
         *self.subscribed_symbols.write().await = Vec::new();
         *self.symbol_mapping.write().await = HashMap::new();
@@ -117,11 +98,9 @@ impl DatasourceManager {
 
     /// Setup heartbeat callback to track connection health
     fn setup_heartbeat_callback(&self, client: &mut CTraderFixClient) {
-        let heartbeat_counter = Arc::clone(&self.heartbeat_counter);
         let connection_metrics = Arc::clone(&self.connection_metrics);
 
         client.set_heartbeat_callback(Arc::new(move || {
-            heartbeat_counter.fetch_add(1, Ordering::Relaxed);
             if let Ok(mut metrics) = connection_metrics.try_write() {
                 if let Some(ref mut m) = *metrics {
                     m.last_heartbeat = Some(std::time::Instant::now());
@@ -208,34 +187,24 @@ impl DatasourceManager {
     /// Store task handles and update connection mode
     async fn finalize_connection(&self, client_handle: JoinHandle<()>, forward_handle: JoinHandle<()>) {
         *self.fix_client_handle.write().await = Some(client_handle);
-        *self.bridge_handle.write().await = Some(forward_handle);
-        *self.mode.write().await = DatasourceMode::Connected;
+        *self.distributor_handle.write().await = Some(forward_handle);
     }
 
     /// Stop FIX connection
     pub async fn stop(&self) -> Result<(), String> {
-        let current_mode = *self.mode.read().await;
-        if current_mode == DatasourceMode::Disconnected {
-            return Err("No active FIX connection to stop".to_string());
-        }
-
         tracing::info!("Stopping FIX connection");
 
         // Abort running tasks
         if let Some(handle) = self.fix_client_handle.write().await.take() {
             handle.abort();
         }
-        if let Some(handle) = self.bridge_handle.write().await.take() {
+        if let Some(handle) = self.distributor_handle.write().await.take() {
             handle.abort();
         }
 
         // Clear state
-        *self.fix_config.write().await = None;
+        *self.subscribed_symbols.write().await = Vec::new();
         *self.connection_metrics.write().await = None;
-        self.heartbeat_counter.store(0, Ordering::Relaxed);
-
-        // Update mode
-        *self.mode.write().await = DatasourceMode::Disconnected;
 
         tracing::info!("FIX connection stopped");
         Ok(())
@@ -243,11 +212,7 @@ impl DatasourceManager {
 
     /// Get current datasource status
     pub async fn get_status(&self) -> DatasourceStatus {
-        let mode = *self.mode.read().await;
-        let connected = mode == DatasourceMode::Connected;
-        let heartbeat_count = self.heartbeat_counter.load(Ordering::Relaxed);
         let symbols = self.subscribed_symbols.read().await;
-        let config = self.fix_config.read().await;
         let metrics = self.connection_metrics.read().await;
 
         let (uptime_seconds, last_heartbeat_seconds_ago) = if let Some(ref m) = *metrics {
@@ -267,38 +232,21 @@ impl DatasourceManager {
 
         let total_symbols = symbols_info.len();
 
-        let (fix_server, connection_info) = if let Some(ref cfg) = *config {
-            (
-                Some(format!("{}:{}", cfg.host, cfg.port)),
-                Some(ConnectionInfo {
-                    sender_comp_id: cfg.credentials.sender_comp_id.clone(),
-                    target_comp_id: cfg.credentials.target_comp_id.clone(),
-                }),
-            )
-        } else {
-            (None, None)
-        };
-
         DatasourceStatus {
-            mode,
-            connected,
+            connected: total_symbols > 0,
             uptime_seconds,
-            heartbeat_count,
             last_heartbeat_seconds_ago,
             symbols_subscribed: symbols_info,
-            total_symbols,
-            fix_server,
-            connection_info,
+            total_symbols
         }
     }
 
     /// Get health status
     pub async fn get_health(&self) -> HealthStatus {
-        let mode = *self.mode.read().await;
         let metrics = self.connection_metrics.read().await;
         let symbols = self.subscribed_symbols.read().await;
 
-        let connection_state = if mode == DatasourceMode::Connected {
+        let connection_state = if !symbols.is_empty() {
             ConnectionState::Connected
         } else {
             ConnectionState::Disconnected

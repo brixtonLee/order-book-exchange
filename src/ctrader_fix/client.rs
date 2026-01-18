@@ -6,6 +6,7 @@ use std::sync::{Arc};
 use tokio::sync::{Mutex, mpsc};
 use crate::ctrader_fix::symbol_data::parse_security_list_response;
 use crate::ctrader_fix::symbol_data::symbol_parser::SymbolData;
+use crate::models::datasource::FixConfig;
 use super::messages::{create_logon_message, create_market_data_request, create_heartbeat, create_security_list_request, parse_fix_message, format_for_display};
 use super::market_data::{MarketTick, MarketDataParser};
 
@@ -48,56 +49,22 @@ pub struct CTraderFixClient {
 }
 
 impl CTraderFixClient {
-    pub fn new(
-        host: String,
-        port: u16,
-        sender_comp_id: String,
-        target_comp_id: String,
-        sender_sub_id: String,
-        target_sub_id: String,
-        username: String,
-        password: String,
-    ) -> Self {
-        Self {
-            host,
-            port,
-            sender_comp_id,
-            target_comp_id,
-            sender_sub_id,
-            target_sub_id,
-            username,
-            password,
-            msg_seq_num: Arc::new(Mutex::new(1)),
-            tick_sender: None,
-            parser: MarketDataParser::new(),
-            display_sender: None,
-            heartbeat_callback: None,
-            security_list_callback: None,
-        }
-    }
-
     /// Create a new client with a tick streaming channel
     pub fn with_tick_channel(
-        host: String,
-        port: u16,
-        sender_comp_id: String,
-        target_comp_id: String,
-        sender_sub_id: String,
-        target_sub_id: String,
-        username: String,
-        password: String,
+        config: FixConfig
     ) -> (Self, mpsc::UnboundedReceiver<MarketTick>) {
         let (tx, rx) = mpsc::unbounded_channel();
 
+        // In Rust, you can only use the shorthand syntax (just the value without field_name:) when the variable name exactly matches the field name. Since you have config.host (not a variable named host), you must use the full syntax
         let client = Self {
-            host,
-            port,
-            sender_comp_id,
-            target_comp_id,
-            sender_sub_id,
-            target_sub_id,
-            username,
-            password,
+            host: config.host,
+            port: config.port,
+            sender_comp_id: config.credentials.sender_comp_id,
+            target_comp_id: config.credentials.target_comp_id,
+            sender_sub_id: config.credentials.sender_sub_id,
+            target_sub_id: config.credentials.target_sub_id,
+            username: config.credentials.username,
+            password: config.credentials.password,
             msg_seq_num: Arc::new(Mutex::new(1)),
             tick_sender: Some(tx),
             parser: MarketDataParser::new(),
