@@ -19,6 +19,7 @@ pub mod persistence;
 pub mod protocol;
 pub mod rabbitmq;
 pub mod risk;
+pub mod testing;
 pub mod utils;
 pub mod websocket;
 

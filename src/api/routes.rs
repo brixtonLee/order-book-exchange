@@ -8,6 +8,7 @@ use std::sync::Arc;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+use crate::algorithms::AlgorithmManager;
 use crate::api::database_handlers::DatabaseState;
 use crate::datasource::DatasourceManager;
 use crate::engine::OrderBookEngine;
@@ -15,13 +16,17 @@ use crate::rabbitmq::RabbitMQService;
 use crate::websocket::{websocket_handler, Broadcaster, WsState};
 use crate::market_data::TickDistributor;
 use crate::ctrader_fix::market_data::MarketTick;
+use crate::testing::{OrderProducer, ProducerConfig, TestingState};
 use tokio::sync::mpsc;
 
+use super::algorithm_handlers::{self, AlgorithmState};
 use super::database_handlers::*;
 use super::datasource_handlers::{self, DatasourceState};
 use super::handlers::*;
 use super::openapi::{ApiDocV1, ApiDocV2};
 use super::rabbitmq_handlers::{self, RabbitMQState};
+use super::stop_order_handlers;
+use super::testing_handlers;
 
 /// Create the API router with Swagger UI, WebSocket support, and TickDistributor
 pub fn create_router(
@@ -45,6 +50,26 @@ pub fn create_router(
         rabbitmq_service: rabbitmq_service.clone(),
         tick_distributor_tx: tick_distributor_tx.clone(),
     };
+
+    // Create testing state and spawn producer background task
+    let testing_state = Arc::new(TestingState::new());
+    let producer = Arc::new(OrderProducer::new(
+        engine.clone(),
+        testing_state.clone(),
+        ProducerConfig::default(),
+    ));
+    tokio::spawn(async move {
+        producer.run().await;
+    });
+
+    // Create algorithm manager and spawn executor
+    let algorithm_manager = Arc::new(AlgorithmManager::new(engine.clone(), broadcaster.clone()));
+    let algorithm_state = Arc::new(AlgorithmState {
+        manager: algorithm_manager.clone(),
+    });
+    tokio::spawn(async move {
+        algorithm_manager.run_executor().await;
+    });
 
     let router = Router::new()
         // Swagger UI with version selection
@@ -87,7 +112,7 @@ pub fn create_router(
         .route("/api/v1/metrics/exchange", get(get_exchange_metrics))
         .route("/api/v1/orderbook/:symbol/microstructure", get(get_microstructure_metrics))
         // Add state for REST endpoints
-        .with_state(engine);
+        .with_state(engine.clone());
 
     // Conditionally merge RabbitMQ routes if service is configured
     let router = if let (Some(rmq_service), Some(distributor)) = (rabbitmq_service, tick_distributor.clone()) {
@@ -129,6 +154,40 @@ pub fn create_router(
     } else {
         router
     };
+
+    // Add testing endpoints
+    let testing_router = Router::new()
+        .route("/api/v1/testing/producer/start", post(testing_handlers::start_producer))
+        .route("/api/v1/testing/producer/stop", post(testing_handlers::stop_producer))
+        .route("/api/v1/testing/producer/status", get(testing_handlers::get_producer_status))
+        .route("/api/v1/testing/metrics", get(testing_handlers::get_testing_metrics))
+        .route("/api/v1/testing/metrics/reset", post(testing_handlers::reset_testing_metrics))
+        .route("/api/v1/testing/scenarios/:scenario_name", post(testing_handlers::start_scenario))
+        .with_state(testing_state);
+
+    let router = router.merge(testing_router);
+
+    // Add stop order endpoints
+    let stop_order_router = Router::new()
+        .route("/api/v1/stop-orders", post(stop_order_handlers::submit_stop_order))
+        .route("/api/v1/stop-orders/:stop_order_id", get(stop_order_handlers::get_stop_order))
+        .route("/api/v1/stop-orders/:stop_order_id", delete(stop_order_handlers::cancel_stop_order))
+        .with_state(engine.clone());
+
+    let router = router.merge(stop_order_router);
+
+    // Add algorithm endpoints
+    let algorithm_router = Router::new()
+        .route("/api/v1/algorithms/twap", post(algorithm_handlers::submit_twap))
+        .route("/api/v1/algorithms/vwap", post(algorithm_handlers::submit_vwap))
+        .route("/api/v1/algorithms/twap/:algorithm_id", get(algorithm_handlers::get_twap_status))
+        .route("/api/v1/algorithms/vwap/:algorithm_id", get(algorithm_handlers::get_vwap_status))
+        .route("/api/v1/algorithms/:algorithm_id/pause", post(algorithm_handlers::pause_algorithm))
+        .route("/api/v1/algorithms/:algorithm_id/resume", post(algorithm_handlers::resume_algorithm))
+        .route("/api/v1/algorithms/:algorithm_id/cancel", post(algorithm_handlers::cancel_algorithm))
+        .with_state(algorithm_state);
+
+    let router = router.merge(algorithm_router);
 
     // Conditionally add TickDistributor monitoring endpoint
     if let Some(distributor) = tick_distributor {

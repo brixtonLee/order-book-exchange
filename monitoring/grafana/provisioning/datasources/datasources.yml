@@ -1,0 +1,116 @@
+# GRAFANA DATASOURCES - Auto-configuration
+#
+# LEARNING POINTS:
+# 1. Datasources connect Grafana to data backends (Loki, Prometheus, etc.)
+# 2. This file auto-configures datasources on Grafana startup
+# 3. No manual setup needed - datasources appear automatically
+# 4. You can have multiple datasources of the same type
+
+apiVersion: 1
+
+# Delete existing datasources not in this config
+deleteDatasources:
+  - name: Loki
+    orgId: 1
+  - name: Prometheus
+    orgId: 1
+
+datasources:
+  # ========================================
+  # LOKI - Log Datasource
+  # ========================================
+  # LEARNING: Query logs using LogQL
+  # Example queries:
+  #   {service="order-book"}
+  #   {service="order-book", level="error"}
+  #   {service="order-book"} |= "FIX connection"
+  #   {service="order-book"} | json | latency > 100
+  #
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    uid: loki
+    isDefault: true  # Set as default datasource
+    editable: true
+    jsonData:
+      # Maximum number of lines to display
+      maxLines: 1000
+      # Derived fields - extract values from logs and link to traces
+      derivedFields:
+        - datasourceUid: loki
+          matcherRegex: "trace_id=(\\w+)"
+          name: TraceID
+          url: "$${__value.raw}"
+
+  # ========================================
+  # PROMETHEUS - Metrics Datasource
+  # ========================================
+  # LEARNING: Query metrics using PromQL
+  # Example queries:
+  #   rate(order_book_orders_total[1m])
+  #   sum by (symbol) (order_book_orders_total)
+  #   histogram_quantile(0.95, rate(latency_bucket[5m]))
+  #
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    uid: prometheus
+    isDefault: false
+    editable: true
+    jsonData:
+      # Query timeout
+      httpMethod: POST
+      # Enable Prometheus Exemplars (links metrics to traces)
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: loki
+
+# ========================================
+# QUERY EXAMPLES
+# ========================================
+#
+# LOGQL (Loki):
+# --------------
+# 1. All logs from order-book service:
+#    {service="order-book"}
+#
+# 2. Only error logs:
+#    {service="order-book", level="error"}
+#
+# 3. Search for specific text:
+#    {service="order-book"} |= "FIX connection started"
+#
+# 4. Exclude text:
+#    {service="order-book"} != "heartbeat"
+#
+# 5. Parse JSON and filter:
+#    {service="order-book"} | json | latency > 100
+#
+# 6. Count log lines per second:
+#    rate({service="order-book"}[1m])
+#
+# 7. Extract fields with regex:
+#    {service="order-book"} | regexp "symbol=(?P<symbol>\\w+)"
+#
+#
+# PROMQL (Prometheus):
+# --------------------
+# 1. Total orders:
+#    order_book_orders_total
+#
+# 2. Rate of orders per second:
+#    rate(order_book_orders_total[1m])
+#
+# 3. Orders by symbol:
+#    sum by (symbol) (order_book_orders_total)
+#
+# 4. 95th percentile latency:
+#    histogram_quantile(0.95, rate(order_book_latency_seconds_bucket[5m]))
+#
+# 5. CPU usage percentage:
+#    rate(process_cpu_seconds_total[1m]) * 100
+#
+# 6. Memory usage in MB:
+#    process_resident_memory_bytes / 1024 / 1024

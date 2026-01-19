@@ -29,6 +29,14 @@ pub struct SubmitOrderRequest {
     /// Expiration time for GTD orders
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expire_time: Option<DateTime<Utc>>,
+    /// Iceberg order total quantity (optional)
+    #[schema(value_type = Option<String>, example = "1000")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iceberg_total_quantity: Option<Decimal>,
+    /// Iceberg order display quantity (optional)
+    #[schema(value_type = Option<String>, example = "100")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iceberg_display_quantity: Option<Decimal>,
 }
 
 /// Response after submitting an order

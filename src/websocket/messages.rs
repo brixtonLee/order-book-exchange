@@ -61,6 +61,14 @@ pub enum WsMessage {
     Pong {
         timestamp: DateTime<Utc>,
     },
+    /// Stop order triggered
+    StopOrderTriggered {
+        stop_order_id: String,
+        triggered_order_id: String,
+        trigger_price: Decimal,
+        symbol: String,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

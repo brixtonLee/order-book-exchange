@@ -1,0 +1,112 @@
+version: '3.8'
+
+# OBSERVABILITY STACK: Grafana + Loki + Promtail + Prometheus
+#
+# ARCHITECTURE:
+# 1. Your Rust App → logs to stdout/file
+# 2. Promtail → tails logs and pushes to Loki
+# 3. Loki → stores logs with efficient indexing
+# 4. Prometheus → scrapes metrics from your app
+# 5. Grafana → visualizes logs (from Loki) + metrics (from Prometheus)
+
+services:
+  # GRAFANA - Visualization & Dashboards
+  # Access: http://localhost:3001 (admin/admin)
+  # Purpose: Query logs with LogQL, visualize metrics with PromQL
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3001:3000"  # Using 3001 to avoid conflict with your app on 3000
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_LOG_LEVEL=info
+    volumes:
+      # Pre-configure datasources (Loki + Prometheus)
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - grafana_data:/var/lib/grafana
+    networks:
+      - monitoring
+    restart: unless-stopped
+    depends_on:
+      - loki
+      - prometheus
+
+  # LOKI - Log Aggregation System
+  # Access: http://localhost:3100 (API endpoint)
+  # Purpose: Stores logs with label-based indexing (like Prometheus for logs)
+  # Key Concept: Only indexes metadata (labels), not full text → cost efficient
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml
+      - loki_data:/loki
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # PROMTAIL - Log Shipping Agent
+  # Purpose: Collects logs from various sources and ships to Loki
+  # Two modes:
+  #   1. File mode: Tails log files on disk
+  #   2. Docker mode: Reads container logs via Docker API
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml
+      # Mount Docker socket to read container logs
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mount log directory (if your app writes to files)
+      - /var/log:/var/log:ro
+      # Mount your app's log directory (adjust path as needed)
+      - ../logs:/app/logs:ro
+    networks:
+      - monitoring
+    restart: unless-stopped
+    depends_on:
+      - loki
+
+  # PROMETHEUS - Metrics Collection & Storage
+  # Access: http://localhost:9090
+  # Purpose: Scrapes metrics from your Rust app's /metrics endpoint
+  # Query Language: PromQL (different from LogQL)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+networks:
+  monitoring:
+    driver: bridge
+    # Enable communication with your main app network if needed
+    # Run: docker network connect order-book-network prometheus
+
+volumes:
+  grafana_data:
+    driver: local
+  loki_data:
+    driver: local
+  prometheus_data:
+    driver: local

@@ -9,10 +9,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-use crate::models::{Order, OrderBook, OrderSide, OrderStatus, OrderType, PriceLevel, Trade};
+use crate::models::{Order, OrderBook, OrderSide, OrderStatus, OrderType, PriceLevel, Trade, StopOrder};
 
 use super::errors::OrderBookError;
 use super::matching::match_order;
+use super::trigger::TriggerEngine;
 use super::validation::validate_order;
 
 // ============================================================================
@@ -60,6 +61,7 @@ fn add_order_to_price_level(
 /// Thread-safe order book engine
 pub struct OrderBookEngine {
     books: Arc<RwLock<HashMap<String, OrderBook>>>,
+    trigger_engine: Arc<RwLock<TriggerEngine>>,
 }
 
 impl OrderBookEngine {
@@ -67,6 +69,7 @@ impl OrderBookEngine {
     pub fn new() -> Self {
         Self {
             books: Arc::new(RwLock::new(HashMap::new())),
+            trigger_engine: Arc::new(RwLock::new(TriggerEngine::new())),
         }
     }
 
@@ -152,6 +155,21 @@ impl OrderBookEngine {
 
         // Update the book
         self.update_book(book);
+
+        // Check for triggered stop orders if any trades occurred
+        if !trades.is_empty() {
+            let last_trade_price = trades.last().unwrap().price;
+            let triggered_orders = {
+                let mut trigger_engine = self.trigger_engine.write().unwrap();
+                trigger_engine.on_trade(last_trade_price)
+            };
+
+            // Recursively submit triggered orders
+            for triggered_order in triggered_orders {
+                // Submit triggered order (ignore errors to prevent cascading failures)
+                let _ = self.add_order(triggered_order);
+            }
+        }
 
         Ok((order, trades))
     }
@@ -252,6 +270,47 @@ impl OrderBookEngine {
             .flat_map(|book| &book.trades)
             .map(|trade| trade.total_fees())
             .sum()
+    }
+
+    // ============================================================================
+    // Stop Order Management
+    // ============================================================================
+
+    /// Add a stop order
+    pub fn add_stop_order(&self, stop: StopOrder) -> Result<(), OrderBookError> {
+        let mut trigger_engine = self.trigger_engine.write().unwrap();
+        trigger_engine.add_stop_order(stop);
+        Ok(())
+    }
+
+    /// Cancel a stop order
+    pub fn cancel_stop_order(&self, order_id: Uuid) -> Result<StopOrder, OrderBookError> {
+        let mut trigger_engine = self.trigger_engine.write().unwrap();
+        trigger_engine
+            .cancel_stop_order(order_id)
+            .ok_or(OrderBookError::OrderNotFound(order_id))
+    }
+
+    /// Get a stop order by ID
+    pub fn get_stop_order(&self, order_id: Uuid) -> Option<StopOrder> {
+        let trigger_engine = self.trigger_engine.read().unwrap();
+        trigger_engine.get_stop_order(order_id).cloned()
+    }
+
+    /// Get all stop orders for a symbol
+    pub fn get_stop_orders_by_symbol(&self, symbol: &str) -> Vec<StopOrder> {
+        let trigger_engine = self.trigger_engine.read().unwrap();
+        trigger_engine
+            .get_stop_orders_by_symbol(symbol)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Get total number of active stop orders
+    pub fn get_total_stop_orders(&self) -> usize {
+        let trigger_engine = self.trigger_engine.read().unwrap();
+        trigger_engine.get_total_stop_orders()
     }
 }
 

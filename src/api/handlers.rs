@@ -99,8 +99,15 @@ pub async fn submit_order(
     State(engine): State<AppState>,
     Json(request): Json<SubmitOrderRequest>,
 ) -> Result<(StatusCode, Json<SubmitOrderResponse>), OrderBookError> {
+    // Create iceberg config if both fields are provided
+    let iceberg = if let (Some(total), Some(display)) = (request.iceberg_total_quantity, request.iceberg_display_quantity) {
+        Some(crate::models::IcebergConfig::new(total, display))
+    } else {
+        None
+    };
+
     // Create order with all options
-    let order = Order::new_with_options(
+    let mut order = Order::new_with_options(
         request.symbol,
         request.side,
         request.order_type,
@@ -112,6 +119,13 @@ pub async fn submit_order(
         request.post_only,
         request.expire_time,
     );
+
+    // Attach iceberg config if provided
+    if let Some(iceberg_config) = iceberg {
+        order.iceberg = Some(iceberg_config);
+        // Override quantity with display quantity for iceberg orders
+        order.quantity = request.iceberg_display_quantity.unwrap();
+    }
 
     // Add to engine
     let (filled_order, trades) = engine.add_order(order)?;
