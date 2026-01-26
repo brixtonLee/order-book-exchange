@@ -27,30 +27,30 @@ impl AlgorithmManager {
     }
 
     /// Submit a TWAP algorithm for execution
-    pub fn submit_twap(&self, mut twap: TwapAlgorithm) -> Uuid {
+    pub fn submit_twap(&self, mut twap: TwapAlgorithm) -> Result<Uuid, String> {
         twap.start();
         let id = twap.id;
-        let mut algos = self.twap_algos.write().unwrap();
+        let mut algos = self.twap_algos.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         algos.insert(id, twap);
         info!("TWAP algorithm {} submitted", id);
-        id
+        Ok(id)
     }
 
     /// Submit a VWAP algorithm for execution
-    pub fn submit_vwap(&self, mut vwap: VwapAlgorithm) -> Uuid {
+    pub fn submit_vwap(&self, mut vwap: VwapAlgorithm) -> Result<Uuid, String> {
         vwap.start();
         let id = vwap.id;
-        let mut algos = self.vwap_algos.write().unwrap();
+        let mut algos = self.vwap_algos.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
         algos.insert(id, vwap);
         info!("VWAP algorithm {} submitted", id);
-        id
+        Ok(id)
     }
 
     /// Pause an algorithm
     pub fn pause(&self, id: Uuid) -> Result<(), String> {
         // Try TWAP first
         {
-            let mut algos = self.twap_algos.write().unwrap();
+            let mut algos = self.twap_algos.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
             if let Some(algo) = algos.get_mut(&id) {
                 algo.pause();
                 return Ok(());
@@ -59,7 +59,7 @@ impl AlgorithmManager {
 
         // Try VWAP
         {
-            let mut algos = self.vwap_algos.write().unwrap();
+            let mut algos = self.vwap_algos.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
             if let Some(algo) = algos.get_mut(&id) {
                 algo.pause();
                 return Ok(());
@@ -73,7 +73,7 @@ impl AlgorithmManager {
     pub fn resume(&self, id: Uuid) -> Result<(), String> {
         // Try TWAP first
         {
-            let mut algos = self.twap_algos.write().unwrap();
+            let mut algos = self.twap_algos.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
             if let Some(algo) = algos.get_mut(&id) {
                 algo.start();
                 return Ok(());
@@ -82,7 +82,7 @@ impl AlgorithmManager {
 
         // Try VWAP
         {
-            let mut algos = self.vwap_algos.write().unwrap();
+            let mut algos = self.vwap_algos.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
             if let Some(algo) = algos.get_mut(&id) {
                 algo.start();
                 return Ok(());
@@ -96,7 +96,7 @@ impl AlgorithmManager {
     pub fn cancel(&self, id: Uuid) -> Result<(), String> {
         // Try TWAP first
         {
-            let mut algos = self.twap_algos.write().unwrap();
+            let mut algos = self.twap_algos.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
             if let Some(algo) = algos.get_mut(&id) {
                 algo.cancel();
                 return Ok(());
@@ -105,7 +105,7 @@ impl AlgorithmManager {
 
         // Try VWAP
         {
-            let mut algos = self.vwap_algos.write().unwrap();
+            let mut algos = self.vwap_algos.write().map_err(|e| format!("Failed to acquire write lock: {}", e))?;
             if let Some(algo) = algos.get_mut(&id) {
                 algo.cancel();
                 return Ok(());
@@ -116,27 +116,27 @@ impl AlgorithmManager {
     }
 
     /// Get TWAP algorithm status
-    pub fn get_twap(&self, id: Uuid) -> Option<TwapAlgorithm> {
-        let algos = self.twap_algos.read().unwrap();
-        algos.get(&id).cloned()
+    pub fn get_twap(&self, id: Uuid) -> Result<Option<TwapAlgorithm>, String> {
+        let algos = self.twap_algos.read().map_err(|e| format!("Failed to acquire read lock: {}", e))?;
+        Ok(algos.get(&id).cloned())
     }
 
     /// Get VWAP algorithm status
-    pub fn get_vwap(&self, id: Uuid) -> Option<VwapAlgorithm> {
-        let algos = self.vwap_algos.read().unwrap();
-        algos.get(&id).cloned()
+    pub fn get_vwap(&self, id: Uuid) -> Result<Option<VwapAlgorithm>, String> {
+        let algos = self.vwap_algos.read().map_err(|e| format!("Failed to acquire read lock: {}", e))?;
+        Ok(algos.get(&id).cloned())
     }
 
     /// Get all active TWAP algorithms
-    pub fn get_all_twap(&self) -> Vec<TwapAlgorithm> {
-        let algos = self.twap_algos.read().unwrap();
-        algos.values().cloned().collect()
+    pub fn get_all_twap(&self) -> Result<Vec<TwapAlgorithm>, String> {
+        let algos = self.twap_algos.read().map_err(|e| format!("Failed to acquire read lock: {}", e))?;
+        Ok(algos.values().cloned().collect())
     }
 
     /// Get all active VWAP algorithms
-    pub fn get_all_vwap(&self) -> Vec<VwapAlgorithm> {
-        let algos = self.vwap_algos.read().unwrap();
-        algos.values().cloned().collect()
+    pub fn get_all_vwap(&self) -> Result<Vec<VwapAlgorithm>, String> {
+        let algos = self.vwap_algos.read().map_err(|e| format!("Failed to acquire read lock: {}", e))?;
+        Ok(algos.values().cloned().collect())
     }
 
     /// Run the executor background task
@@ -162,7 +162,13 @@ impl AlgorithmManager {
 
     /// Execute next slice for all running TWAP algorithms
     async fn execute_twap_slice(&self, current_time: chrono::DateTime<Utc>) {
-        let mut algos = self.twap_algos.write().unwrap();
+        let mut algos = match self.twap_algos.write() {
+            Ok(algos) => algos,
+            Err(e) => {
+                error!("Failed to acquire write lock for TWAP algorithms: {}", e);
+                return;
+            }
+        };
 
         for (id, algo) in algos.iter_mut() {
             if algo.status != AlgorithmStatus::Running {
@@ -197,7 +203,13 @@ impl AlgorithmManager {
 
     /// Execute next slice for all running VWAP algorithms
     async fn execute_vwap_slice(&self, current_time: chrono::DateTime<Utc>) {
-        let mut algos = self.vwap_algos.write().unwrap();
+        let mut algos = match self.vwap_algos.write() {
+            Ok(algos) => algos,
+            Err(e) => {
+                error!("Failed to acquire write lock for VWAP algorithms: {}", e);
+                return;
+            }
+        };
 
         for (id, algo) in algos.iter_mut() {
             if algo.status != AlgorithmStatus::Running {
@@ -234,27 +246,39 @@ impl AlgorithmManager {
     fn cleanup_finished_algorithms(&self) {
         // Cleanup TWAP
         {
-            let mut algos = self.twap_algos.write().unwrap();
-            algos.retain(|_, algo| {
-                algo.status != AlgorithmStatus::Completed
-                    && algo.status != AlgorithmStatus::Cancelled
-            });
+            match self.twap_algos.write() {
+                Ok(mut algos) => {
+                    algos.retain(|_, algo| {
+                        algo.status != AlgorithmStatus::Completed
+                            && algo.status != AlgorithmStatus::Cancelled
+                    });
+                }
+                Err(e) => {
+                    error!("Failed to acquire write lock for TWAP cleanup: {}", e);
+                }
+            }
         }
 
         // Cleanup VWAP
         {
-            let mut algos = self.vwap_algos.write().unwrap();
-            algos.retain(|_, algo| {
-                algo.status != AlgorithmStatus::Completed
-                    && algo.status != AlgorithmStatus::Cancelled
-            });
+            match self.vwap_algos.write() {
+                Ok(mut algos) => {
+                    algos.retain(|_, algo| {
+                        algo.status != AlgorithmStatus::Completed
+                            && algo.status != AlgorithmStatus::Cancelled
+                    });
+                }
+                Err(e) => {
+                    error!("Failed to acquire write lock for VWAP cleanup: {}", e);
+                }
+            }
         }
     }
 
     /// Get total number of active algorithms
-    pub fn get_total_algorithms(&self) -> usize {
-        let twap_count = self.twap_algos.read().unwrap().len();
-        let vwap_count = self.vwap_algos.read().unwrap().len();
-        twap_count + vwap_count
+    pub fn get_total_algorithms(&self) -> Result<usize, String> {
+        let twap_count = self.twap_algos.read().map_err(|e| format!("Failed to acquire read lock: {}", e))?.len();
+        let vwap_count = self.vwap_algos.read().map_err(|e| format!("Failed to acquire read lock: {}", e))?.len();
+        Ok(twap_count + vwap_count)
     }
 }

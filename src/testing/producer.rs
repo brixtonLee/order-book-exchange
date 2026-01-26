@@ -120,10 +120,21 @@ impl OrderProducer {
         info!("Order producer starting");
 
         loop {
-            // Check if producer is running
-            let (running, rate) = {
-                let state = self.testing_state.producer_state.read().unwrap();
-                (state.running, state.rate_per_second)
+            // Check if producer is running - scope ensures guard is dropped before await
+            let state_result = {
+                match self.testing_state.producer_state.read() {
+                    Ok(state) => Ok((state.running, state.rate_per_second)),
+                    Err(e) => Err(format!("{}", e)),
+                }
+            };
+
+            let (running, rate) = match state_result {
+                Ok((r, rt)) => (r, rt),
+                Err(e) => {
+                    error!("Failed to acquire read lock on producer state: {}", e);
+                    tokio::time::sleep(TokioDuration::from_secs(1)).await;
+                    continue;
+                }
             };
 
             if !running {
@@ -143,16 +154,23 @@ impl OrderProducer {
 
             // Generate orders at specified rate
             while {
-                let state = self.testing_state.producer_state.read().unwrap();
-                state.running
+                match self.testing_state.producer_state.read() {
+                    Ok(state) => state.running,
+                    Err(e) => {
+                        error!("Failed to acquire read lock on producer state: {}", e);
+                        false
+                    }
+                }
             } {
                 interval.tick().await;
 
                 // Generate and submit random order
                 if let Err(e) = self.generate_and_submit_order().await {
                     error!("Failed to generate order: {}", e);
-                    let mut state = self.testing_state.producer_state.write().unwrap();
-                    state.errors += 1;
+                    match self.testing_state.producer_state.write() {
+                        Ok(mut state) => state.errors += 1,
+                        Err(e) => error!("Failed to acquire write lock to increment error count: {}", e),
+                    }
                 }
             }
 
@@ -170,32 +188,40 @@ impl OrderProducer {
             Ok(_) => {
                 // Update producer state
                 {
-                    let mut state = self.testing_state.producer_state.write().unwrap();
-                    state.orders_generated += 1;
+                    match self.testing_state.producer_state.write() {
+                        Ok(mut state) => state.orders_generated += 1,
+                        Err(e) => error!("Failed to acquire write lock on producer state: {}", e),
+                    }
                 }
 
                 // Update metrics
                 {
-                    let mut metrics = self.testing_state.metrics.write().unwrap();
-                    metrics.increment_order_type(&order.order_type);
-                    metrics.increment_tif(&order.time_in_force);
-                    metrics.increment_stp(&order.stp_mode);
-                    metrics.increment_side(&order.side);
-                    metrics.increment_symbol(&symbol);
+                    match self.testing_state.metrics.write() {
+                        Ok(mut metrics) => {
+                            metrics.increment_order_type(&order.order_type);
+                            metrics.increment_tif(&order.time_in_force);
+                            metrics.increment_stp(&order.stp_mode);
+                            metrics.increment_side(&order.side);
+                            metrics.increment_symbol(&symbol);
 
-                    if order.iceberg.is_some() {
-                        metrics.increment_iceberg();
-                    }
-                    if order.post_only {
-                        metrics.increment_post_only();
+                            if order.iceberg.is_some() {
+                                metrics.increment_iceberg();
+                            }
+                            if order.post_only {
+                                metrics.increment_post_only();
+                            }
+                        }
+                        Err(e) => error!("Failed to acquire write lock on metrics: {}", e),
                     }
                 }
 
                 Ok(())
             }
             Err(e) => {
-                let mut metrics = self.testing_state.metrics.write().unwrap();
-                metrics.increment_rejection();
+                match self.testing_state.metrics.write() {
+                    Ok(mut metrics) => metrics.increment_rejection(),
+                    Err(e) => error!("Failed to acquire write lock on metrics: {}", e),
+                }
                 Err(format!("Order submission failed: {}", e))
             }
         }
@@ -206,9 +232,13 @@ impl OrderProducer {
         let mut rng = thread_rng();
 
         // Select random symbol
-        let state = self.testing_state.producer_state.read().unwrap();
-        let symbol = state.symbols.choose(&mut rng).unwrap().clone();
-        drop(state);
+        let symbol = match self.testing_state.producer_state.read() {
+            Ok(state) => state.symbols.choose(&mut rng).unwrap().clone(),
+            Err(e) => {
+                error!("Failed to acquire read lock on producer state: {}", e);
+                "AAPL".to_string() // Fallback to default symbol
+            }
+        };
 
         // Select random user
         let user_id = self.config.user_pool.choose(&mut rng).unwrap().clone();

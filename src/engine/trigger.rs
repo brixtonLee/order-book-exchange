@@ -48,6 +48,7 @@ impl TriggerEngine {
     /// Cancel a stop order
     pub fn cancel_stop_order(&mut self, order_id: Uuid) -> Option<StopOrder> {
         if let Some((trigger_price, is_buy)) = self.order_index.remove(&order_id) {
+            
             let map = if is_buy {
                 &mut self.buy_stops
             } else {

@@ -51,7 +51,17 @@ pub async fn start_producer(
     State(state): State<Arc<TestingState>>,
     Json(request): Json<StartProducerRequest>,
 ) -> impl IntoResponse {
-    let mut producer_state = state.producer_state.write().unwrap();
+    let mut producer_state = match state.producer_state.write() {
+        Ok(state) => state,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SuccessResponse {
+                    message: format!("Failed to acquire lock: {}", e),
+                }),
+            );
+        }
+    };
 
     // Update configuration
     if let Some(rate) = request.rate_per_second {
@@ -86,7 +96,17 @@ pub async fn start_producer(
     tag = "testing"
 )]
 pub async fn stop_producer(State(state): State<Arc<TestingState>>) -> impl IntoResponse {
-    let mut producer_state = state.producer_state.write().unwrap();
+    let mut producer_state = match state.producer_state.write() {
+        Ok(state) => state,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SuccessResponse {
+                    message: format!("Failed to acquire lock: {}", e),
+                }),
+            );
+        }
+    };
     producer_state.running = false;
 
     (
@@ -109,7 +129,22 @@ pub async fn stop_producer(State(state): State<Arc<TestingState>>) -> impl IntoR
 pub async fn get_producer_status(
     State(state): State<Arc<TestingState>>,
 ) -> impl IntoResponse {
-    let producer_state = state.producer_state.read().unwrap();
+    let producer_state = match state.producer_state.read() {
+        Ok(state) => state,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ProducerStatusResponse {
+                    running: false,
+                    rate_per_second: 0,
+                    symbols: vec![],
+                    orders_generated: 0,
+                    errors: 0,
+                    started_at: None,
+                }),
+            );
+        }
+    };
 
     let response = ProducerStatusResponse {
         running: producer_state.running,
@@ -137,7 +172,17 @@ pub async fn get_producer_status(
 pub async fn get_testing_metrics(
     State(state): State<Arc<TestingState>>,
 ) -> impl IntoResponse {
-    let metrics = state.metrics.read().unwrap().clone();
+    let metrics = match state.metrics.read() {
+        Ok(metrics) => metrics.clone(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(TestingMetricsResponse {
+                    metrics: TestingMetrics::default(),
+                }),
+            );
+        }
+    };
 
     (
         StatusCode::OK,
@@ -157,12 +202,32 @@ pub async fn get_testing_metrics(
 pub async fn reset_testing_metrics(
     State(state): State<Arc<TestingState>>,
 ) -> impl IntoResponse {
-    let mut metrics = state.metrics.write().unwrap();
-    *metrics = TestingMetrics::default();
+    match state.metrics.write() {
+        Ok(mut metrics) => *metrics = TestingMetrics::default(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SuccessResponse {
+                    message: format!("Failed to acquire lock on metrics: {}", e),
+                }),
+            );
+        }
+    }
 
-    let mut producer_state = state.producer_state.write().unwrap();
-    producer_state.orders_generated = 0;
-    producer_state.errors = 0;
+    match state.producer_state.write() {
+        Ok(mut producer_state) => {
+            producer_state.orders_generated = 0;
+            producer_state.errors = 0;
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SuccessResponse {
+                    message: format!("Failed to acquire lock on producer state: {}", e),
+                }),
+            );
+        }
+    }
 
     (
         StatusCode::OK,
@@ -216,9 +281,20 @@ pub async fn start_scenario(
     let config = scenario.to_config();
 
     // Update producer state
-    let mut producer_state = state.producer_state.write().unwrap();
-    producer_state.running = true;
-    producer_state.started_at = Some(Utc::now());
+    match state.producer_state.write() {
+        Ok(mut producer_state) => {
+            producer_state.running = true;
+            producer_state.started_at = Some(Utc::now());
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SuccessResponse {
+                    message: format!("Failed to acquire lock: {}", e),
+                }),
+            );
+        }
+    }
 
     // Note: The ProducerConfig in the OrderProducer is immutable
     // To truly apply the scenario config, we'd need to recreate the producer

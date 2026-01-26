@@ -189,7 +189,7 @@ pub async fn get_stop_order(
     Path(stop_order_id): Path<Uuid>,
 ) -> impl IntoResponse {
     match engine.get_stop_order(stop_order_id) {
-        Some(stop_order) => (
+        Ok(Some(stop_order)) => (
             StatusCode::OK,
             Json(StopOrderDetailResponse {
                 id: stop_order.id,
@@ -214,10 +214,17 @@ pub async fn get_stop_order(
             }),
         )
             .into_response(),
-        None => (
+        Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("Stop order {} not found", stop_order_id),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to get stop order: {}", e),
             }),
         )
             .into_response(),

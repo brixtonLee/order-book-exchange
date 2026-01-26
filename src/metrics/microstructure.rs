@@ -55,6 +55,8 @@ impl MicrostructureMetrics {
         let best_ask_vol = book.asks.get(&best_ask)
             .map(|level| level.total_quantity)
             .unwrap_or(Decimal::ZERO);
+        
+        
 
         // Mid price (simple average)
         let mid_price = (best_bid + best_ask) / dec!(2);

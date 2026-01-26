@@ -193,7 +193,7 @@ async fn send_orderbook_snapshot(
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
     engine: &OrderBookEngine,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let book = engine.get_order_book(symbol);
+    let book = engine.get_order_book(symbol)?;
 
     // Build snapshot
     let bids: Vec<super::messages::PriceLevel> = book

@@ -74,18 +74,19 @@ impl OrderBookEngine {
     }
 
     /// Get or create an order book for a symbol
-    fn  get_or_create_book(&self, symbol: &str) -> OrderBook {
-        let mut books = self.books.write().unwrap();
-        books
+    fn get_or_create_book(&self, symbol: &str) -> Result<OrderBook, OrderBookError> {
+        let mut books = self.books.write().map_err(|e| OrderBookError::LockError(format!("Failed to acquire write lock: {}", e)))?;
+        Ok(books
             .entry(symbol.to_string())
             .or_insert_with(|| OrderBook::new(symbol.to_string()))
-            .clone()
+            .clone())
     }
 
     /// Update an order book
-    fn update_book(&self, book: OrderBook) {
-        let mut books = self.books.write().unwrap();
+    fn update_book(&self, book: OrderBook) -> Result<(), OrderBookError> {
+        let mut books = self.books.write().map_err(|e| OrderBookError::LockError(format!("Failed to acquire write lock: {}", e)))?;
         books.insert(book.symbol.clone(), book);
+        Ok(())
     }
 
     /// Add an order to the order book and attempt to match it
@@ -106,11 +107,10 @@ impl OrderBookEngine {
         */
         validate_order(&order)?;
 
-        let mut book = self.get_or_create_book(&order.symbol);
+        let mut book = self.get_or_create_book(&order.symbol)?;
 
-        // Check for duplicate order
-        if book.orders.contains_key(&order.id) {
-            return Err(OrderBookError::DuplicateOrder(order.id));
+        if book.check_order_in_book(order.id) {
+            return Err(OrderBookError::DuplicateOrder(order.id));    
         }
 
         // Attempt to match the order
@@ -125,15 +125,15 @@ impl OrderBookEngine {
             // Different from *, &id equals to match a reference and give me the results, this is just pattern matching
             // let &value = r; value is i32 (5)
             // let value = *r value is i32 (5)
-            .filter_map(|&id| {
-                book.orders.get(&id).map(|order| {
+            .filter_map(|id| {
+                book.orders.get(id).map(|order| {
                     (id, order.price, order.side.clone(), order.remaining_quantity())
                 })
             })
             .collect();
 
         // Now perform the removals
-        for (cancelled_id, price_opt, side, remaining_qty) in cancellation_data {
+        for (&cancelled_id, price_opt, side, remaining_qty) in cancellation_data {
             if let Some(price) = price_opt {
                 remove_order_from_price_level(&mut book, cancelled_id, price, &side, remaining_qty);
             }
@@ -154,13 +154,13 @@ impl OrderBookEngine {
         }
 
         // Update the book
-        self.update_book(book);
+        self.update_book(book)?;
 
         // Check for triggered stop orders if any trades occurred
         if !trades.is_empty() {
             let last_trade_price = trades.last().unwrap().price;
             let triggered_orders = {
-                let mut trigger_engine = self.trigger_engine.write().unwrap();
+                let mut trigger_engine = self.trigger_engine.write().map_err(|e| OrderBookError::LockError(format!("Failed to acquire write lock: {}", e)))?;
                 trigger_engine.on_trade(last_trade_price)
             };
 
@@ -180,7 +180,7 @@ impl OrderBookEngine {
         symbol: &str,
         order_id: Uuid,
     ) -> Result<Order, OrderBookError> {
-        let mut book = self.get_or_create_book(symbol);
+        let mut book = self.get_or_create_book(symbol)?;
 
         // Get the order
         let mut order = book
@@ -208,14 +208,14 @@ impl OrderBookEngine {
         order.status = OrderStatus::Cancelled;
 
         // Update the book
-        self.update_book(book);
+        self.update_book(book)?;
 
         Ok(order)
     }
 
     /// Get order status
     pub fn get_order(&self, symbol: &str, order_id: Uuid) -> Result<Order, OrderBookError> {
-        let book = self.get_or_create_book(symbol);
+        let book = self.get_or_create_book(symbol)?;
         book.orders
             .get(&order_id)
             .cloned()
@@ -223,53 +223,53 @@ impl OrderBookEngine {
     }
 
     /// Get the order book for a symbol
-    pub fn get_order_book(&self, symbol: &str) -> OrderBook {
+    pub fn get_order_book(&self, symbol: &str) -> Result<OrderBook, OrderBookError> {
         self.get_or_create_book(symbol)
     }
 
     /// Get recent trades for a symbol
-    pub fn get_recent_trades(&self, symbol: &str, limit: usize) -> Vec<Trade> {
-        let book = self.get_or_create_book(symbol);
-        book.get_recent_trades(limit)
+    pub fn get_recent_trades(&self, symbol: &str, limit: usize) -> Result<Vec<Trade>, OrderBookError> {
+        let book = self.get_or_create_book(symbol)?;
+        Ok(book.get_recent_trades(limit))
     }
 
     /// Get all active symbols
-    pub fn get_symbols(&self) -> Vec<String> {
-        let books = self.books.read().unwrap();
-        books.keys().cloned().collect()
+    pub fn get_symbols(&self) -> Result<Vec<String>, OrderBookError> {
+        let books = self.books.read().map_err(|e| OrderBookError::LockError(format!("Failed to acquire read lock: {}", e)))?;
+        Ok(books.keys().cloned().collect())
     }
 
     /// Get total number of active orders across all symbols
-    pub fn get_total_active_orders(&self) -> usize {
-        let books = self.books.read().unwrap();
-        books.values().map(|book| book.orders.len()).sum()
+    pub fn get_total_active_orders(&self) -> Result<usize, OrderBookError> {
+        let books = self.books.read().map_err(|e| OrderBookError::LockError(format!("Failed to acquire read lock: {}", e)))?;
+        Ok(books.values().map(|book| book.orders.len()).sum())
     }
 
     /// Get total number of trades across all symbols
-    pub fn get_total_trades(&self) -> usize {
-        let books = self.books.read().unwrap();
-        books.values().map(|book| book.trades.len()).sum()
+    pub fn get_total_trades(&self) -> Result<usize, OrderBookError> {
+        let books = self.books.read().map_err(|e| OrderBookError::LockError(format!("Failed to acquire read lock: {}", e)))?;
+        Ok(books.values().map(|book| book.trades.len()).sum())
     }
 
     /// Get total volume across all symbols
-    pub fn get_total_volume(&self) -> Decimal {
-        let books = self.books.read().unwrap();
-        books
+    pub fn get_total_volume(&self) -> Result<Decimal, OrderBookError> {
+        let books = self.books.read().map_err(|e| OrderBookError::LockError(format!("Failed to acquire read lock: {}", e)))?;
+        Ok(books
             .values()
             .flat_map(|book| &book.trades)
             .map(|trade| trade.value())
-            .sum()
+            .sum())
     }
 
     /// Get total fees collected across all symbols
-    pub fn get_total_fees(&self) -> Decimal {
-        let books = self.books.read().unwrap();
-        books
+    pub fn get_total_fees(&self) -> Result<Decimal, OrderBookError> {
+        let books = self.books.read().map_err(|e| OrderBookError::LockError(format!("Failed to acquire read lock: {}", e)))?;
+        Ok(books
             .values()
             // Flatten the trades from all books into one single iterator
             .flat_map(|book| &book.trades)
             .map(|trade| trade.total_fees())
-            .sum()
+            .sum())
     }
 
     // ============================================================================
@@ -278,39 +278,39 @@ impl OrderBookEngine {
 
     /// Add a stop order
     pub fn add_stop_order(&self, stop: StopOrder) -> Result<(), OrderBookError> {
-        let mut trigger_engine = self.trigger_engine.write().unwrap();
+        let mut trigger_engine = self.trigger_engine.write().map_err(|e| OrderBookError::LockError(format!("Failed to acquire write lock: {}", e)))?;
         trigger_engine.add_stop_order(stop);
         Ok(())
     }
 
     /// Cancel a stop order
     pub fn cancel_stop_order(&self, order_id: Uuid) -> Result<StopOrder, OrderBookError> {
-        let mut trigger_engine = self.trigger_engine.write().unwrap();
+        let mut trigger_engine = self.trigger_engine.write().map_err(|e| OrderBookError::LockError(format!("Failed to acquire write lock: {}", e)))?;
         trigger_engine
             .cancel_stop_order(order_id)
             .ok_or(OrderBookError::OrderNotFound(order_id))
     }
 
     /// Get a stop order by ID
-    pub fn get_stop_order(&self, order_id: Uuid) -> Option<StopOrder> {
-        let trigger_engine = self.trigger_engine.read().unwrap();
-        trigger_engine.get_stop_order(order_id).cloned()
+    pub fn get_stop_order(&self, order_id: Uuid) -> Result<Option<StopOrder>, OrderBookError> {
+        let trigger_engine = self.trigger_engine.read().map_err(|e| OrderBookError::LockError(format!("Failed to acquire read lock: {}", e)))?;
+        Ok(trigger_engine.get_stop_order(order_id).cloned())
     }
 
     /// Get all stop orders for a symbol
-    pub fn get_stop_orders_by_symbol(&self, symbol: &str) -> Vec<StopOrder> {
-        let trigger_engine = self.trigger_engine.read().unwrap();
-        trigger_engine
+    pub fn get_stop_orders_by_symbol(&self, symbol: &str) -> Result<Vec<StopOrder>, OrderBookError> {
+        let trigger_engine = self.trigger_engine.read().map_err(|e| OrderBookError::LockError(format!("Failed to acquire read lock: {}", e)))?;
+        Ok(trigger_engine
             .get_stop_orders_by_symbol(symbol)
             .into_iter()
             .cloned()
-            .collect()
+            .collect())
     }
 
     /// Get total number of active stop orders
-    pub fn get_total_stop_orders(&self) -> usize {
-        let trigger_engine = self.trigger_engine.read().unwrap();
-        trigger_engine.get_total_stop_orders()
+    pub fn get_total_stop_orders(&self) -> Result<usize, OrderBookError> {
+        let trigger_engine = self.trigger_engine.read().map_err(|e| OrderBookError::LockError(format!("Failed to acquire read lock: {}", e)))?;
+        Ok(trigger_engine.get_total_stop_orders())
     }
 }
 

@@ -102,17 +102,26 @@ pub async fn submit_twap(
     twap.limit_price = request.limit_price;
     twap.urgency = request.urgency.unwrap_or(Decimal::ONE);
 
-    let algorithm_id = state.manager.submit_twap(twap);
-
-    (
-        StatusCode::CREATED,
-        Json(AlgorithmResponse {
-            algorithm_id,
-            algorithm_type: "TWAP".to_string(),
-            status: AlgorithmStatus::Running,
-            message: "TWAP algorithm submitted successfully".to_string(),
-        }),
-    )
+    match state.manager.submit_twap(twap) {
+        Ok(algorithm_id) => (
+            StatusCode::CREATED,
+            Json(AlgorithmResponse {
+                algorithm_id,
+                algorithm_type: "TWAP".to_string(),
+                status: AlgorithmStatus::Running,
+                message: "TWAP algorithm submitted successfully".to_string(),
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AlgorithmResponse {
+                algorithm_id: uuid::Uuid::nil(),
+                algorithm_type: "TWAP".to_string(),
+                status: AlgorithmStatus::Cancelled,
+                message: format!("Failed to submit TWAP algorithm: {}", e),
+            }),
+        ),
+    }
 }
 
 /// Submit a VWAP algorithm
@@ -140,17 +149,26 @@ pub async fn submit_vwap(
         request.end_time,
     );
 
-    let algorithm_id = state.manager.submit_vwap(vwap);
-
-    (
-        StatusCode::CREATED,
-        Json(AlgorithmResponse {
-            algorithm_id,
-            algorithm_type: "VWAP".to_string(),
-            status: AlgorithmStatus::Running,
-            message: "VWAP algorithm submitted successfully".to_string(),
-        }),
-    )
+    match state.manager.submit_vwap(vwap) {
+        Ok(algorithm_id) => (
+            StatusCode::CREATED,
+            Json(AlgorithmResponse {
+                algorithm_id,
+                algorithm_type: "VWAP".to_string(),
+                status: AlgorithmStatus::Running,
+                message: "VWAP algorithm submitted successfully".to_string(),
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AlgorithmResponse {
+                algorithm_id: uuid::Uuid::nil(),
+                algorithm_type: "VWAP".to_string(),
+                status: AlgorithmStatus::Cancelled,
+                message: format!("Failed to submit VWAP algorithm: {}", e),
+            }),
+        ),
+    }
 }
 
 /// Get TWAP algorithm status
@@ -171,7 +189,7 @@ pub async fn get_twap_status(
     Path(algorithm_id): Path<Uuid>,
 ) -> impl IntoResponse {
     match state.manager.get_twap(algorithm_id) {
-        Some(algo) => {
+        Ok(Some(algo)) => {
             let stats = algo.execution_stats();
             (
                 StatusCode::OK,
@@ -182,10 +200,17 @@ pub async fn get_twap_status(
             )
                 .into_response()
         }
-        None => (
+        Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("TWAP algorithm {} not found", algorithm_id),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to get TWAP algorithm: {}", e),
             }),
         )
             .into_response(),
@@ -210,7 +235,7 @@ pub async fn get_vwap_status(
     Path(algorithm_id): Path<Uuid>,
 ) -> impl IntoResponse {
     match state.manager.get_vwap(algorithm_id) {
-        Some(algo) => {
+        Ok(Some(algo)) => {
             let stats = algo.stats();
             (
                 StatusCode::OK,
@@ -221,10 +246,17 @@ pub async fn get_vwap_status(
             )
                 .into_response()
         }
-        None => (
+        Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("VWAP algorithm {} not found", algorithm_id),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to get VWAP algorithm: {}", e),
             }),
         )
             .into_response(),
