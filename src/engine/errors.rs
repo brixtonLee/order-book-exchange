@@ -63,6 +63,10 @@ pub enum OrderBookError {
     /// An error occurred during order matching
     #[error("Matching error: {0}")]
     MatchingError(#[from] MatchingError),
+
+    /// Failed to acquire lock (RwLock poisoned)
+    #[error("Lock error: {0}")]
+    LockError(String),
 }
 
 impl OrderBookError {

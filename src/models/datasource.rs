@@ -33,19 +33,13 @@ pub enum DatasourceMode {
 /// Detailed datasource status response
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DatasourceStatus {
-    pub mode: DatasourceMode,
     pub connected: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uptime_seconds: Option<u64>,
-    pub heartbeat_count: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_heartbeat_seconds_ago: Option<u64>,
     pub symbols_subscribed: Vec<SymbolInfo>,
-    pub total_symbols: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fix_server: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub connection_info: Option<ConnectionInfo>,
+    pub total_symbols: usize
 }
 
 /// Symbol information from Security List Response
@@ -57,11 +51,6 @@ pub struct SymbolInfo {
 }
 
 /// Masked connection information (no sensitive data)
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ConnectionInfo {
-    pub sender_comp_id: String,
-    pub target_comp_id: String,
-}
 
 /// Health status of the system
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

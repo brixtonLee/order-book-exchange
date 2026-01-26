@@ -52,25 +52,14 @@ impl FixToWebSocketBridge {
 
     /// Convert MarketTick to Ticker WsMessage
     async fn tick_to_ws_message(&self, tick: &MarketTick) -> WsMessage {
-        let symbol = self.get_symbol_name(&tick.symbol_id).await;
-
         WsMessage::Ticker {
-            symbol,
+            symbol_id: tick.symbol_id.clone(),
             best_bid: tick.bid_price,
             best_ask: tick.ask_price,
             spread: tick.spread(),
             mid_price: tick.mid_price(),
             timestamp: tick.timestamp,
         }
-    }
-
-    /// Process a single tick and broadcast to WebSocket
-    pub async fn process_tick(&self, tick: MarketTick) {
-        let symbol = self.get_symbol_name(&tick.symbol_id).await;
-        let ws_message = self.tick_to_ws_message(&tick).await;
-        let topic = format!("ticker:{}", symbol);
-        self.broadcaster.broadcast(&topic, ws_message.clone());
-        self.broadcaster.broadcast("ticker:*", ws_message);
     }
 
     /// Run the bridge - consume ticks from channel and broadcast to WebSocket
@@ -84,19 +73,28 @@ impl FixToWebSocketBridge {
 
         println!("🔴 FIX to WebSocket bridge stopped");
     }
+
+
+    /// Process a single tick and broadcast to WebSocket
+    async fn process_tick(&self, tick: MarketTick) {
+        let ws_message = self.tick_to_ws_message(&tick).await;
+        let topic = format!("ticker:{}", &tick.symbol_id);
+        self.broadcaster.broadcast(&topic, ws_message.clone());
+        self.broadcaster.broadcast("ticker:*", ws_message);
+    }
 }
 
 /// Statistics tracker for market data
 pub struct MarketDataStats {
     tick_count: std::sync::atomic::AtomicU64,
-    last_tick_time: std::sync::Arc<tokio::sync::Mutex<Option<chrono::DateTime<Utc>>>>,
+    last_tick_time: Arc<tokio::sync::Mutex<Option<chrono::DateTime<Utc>>>>,
 }
 
 impl MarketDataStats {
     pub fn new() -> Self {
         Self {
             tick_count: std::sync::atomic::AtomicU64::new(0),
-            last_tick_time: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
+            last_tick_time: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 

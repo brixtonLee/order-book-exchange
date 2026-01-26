@@ -126,7 +126,6 @@ pub struct ApiDocV1;
             DatasourceStatus,
             DatasourceMode,
             SymbolInfo,
-            ConnectionInfo,
             HealthStatus,
             HealthState,
             ConnectionState,

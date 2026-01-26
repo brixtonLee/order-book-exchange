@@ -1,0 +1,10 @@
+# Ignore environment file with credentials
+.env
+
+# Ignore data volumes (will be created by Docker)
+loki/data/
+prometheus/data/
+grafana/data/
+
+# Ignore logs
+*.log

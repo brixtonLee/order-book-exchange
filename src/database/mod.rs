@@ -11,7 +11,7 @@ pub mod enums;
 pub mod models;
 pub mod repositories;
 pub mod schema;
-pub mod tick_persister;
+pub mod tick_queue;
 
 pub use connection::{DatabasePools, establish_connection_pools};
-pub use tick_persister::TickPersister;
+pub use tick_queue::{TickQueue, TickQueueStats};

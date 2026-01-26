@@ -1,0 +1,135 @@
+# PROMTAIL CONFIGURATION - Log Shipping Agent
+#
+# LEARNING POINTS:
+# 1. Promtail TAILS logs (like `tail -f`) and PUSHES to Loki (HTTP)
+# 2. It adds LABELS to logs before sending (e.g., {service="order-book", level="error"})
+# 3. Pipeline stages can PARSE logs to extract fields as labels
+# 4. Two main modes: File scraping OR Docker container logs
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+# Where to send logs
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+    # LEARNING: Promtail PUSHES logs to Loki (unlike Prometheus which PULLS metrics)
+
+positions:
+  # File to track which logs have been read (like a bookmark)
+  filename: /tmp/positions.yaml
+
+# SCRAPE CONFIGS - Define what logs to collect
+scrape_configs:
+  # ========================================
+  # CONFIG 1: Docker Container Logs
+  # ========================================
+  # LEARNING: This reads logs from ALL Docker containers
+  # Automatically adds labels: container_name, compose_service, etc.
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["logging=promtail"]  # Only containers with this label
+
+    relabel_configs:
+      # Extract container name as a label
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+
+      # Extract compose service name
+      - source_labels: ['__meta_docker_compose_service']
+        target_label: 'service'
+
+      # Extract compose project name
+      - source_labels: ['__meta_docker_compose_project']
+        target_label: 'project'
+
+    # Pipeline stages - process and parse logs
+    pipeline_stages:
+      # Stage 1: Extract timestamp from log line
+      - regex:
+          expression: '^(?P<timestamp>\S+)\s+(?P<level>\S+)\s+(?P<message>.*)$'
+
+      # Stage 2: Use extracted timestamp
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+
+      # Stage 3: Extract log level as a label
+      - labels:
+          level:
+
+  # ========================================
+  # CONFIG 2: File-based Logs (Your Rust App)
+  # ========================================
+  # LEARNING: This tails log files from your Rust application
+  # Adjust the path to where your app writes logs
+  - job_name: order-book-app
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: order-book
+          service: order-book-api
+          __path__: /app/logs/*.log  # Adjust to your log file path
+
+    pipeline_stages:
+      # Parse JSON logs (if your Rust app outputs JSON)
+      # Example log: {"timestamp":"2024-01-01T12:00:00Z","level":"INFO","message":"Server started"}
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            message: message
+            target: target
+
+      # Extract level as a label for easy filtering
+      - labels:
+          level:
+          target:
+
+      # Use the timestamp from the log
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+
+  # ========================================
+  # CONFIG 3: System Logs (Optional)
+  # ========================================
+  # LEARNING: You can also collect system logs for debugging
+  - job_name: system
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: system
+          __path__: /var/log/syslog
+
+    pipeline_stages:
+      # Basic syslog parsing
+      - regex:
+          expression: '^(?P<timestamp>\w+\s+\d+\s+\d+:\d+:\d+)\s+(?P<hostname>\S+)\s+(?P<app>\S+)(\[(?P<pid>\d+)\])?: (?P<message>.*)$'
+
+      - labels:
+          app:
+
+# ========================================
+# EXAMPLE: How to add custom labels
+# ========================================
+# Labels are KEY to querying in Loki. Examples:
+#
+# Query all errors:
+#   {service="order-book", level="error"}
+#
+# Query specific container:
+#   {container="order-book-api"}
+#
+# Search for text in logs:
+#   {service="order-book"} |= "FIX connection"
+#
+# Parse and filter:
+#   {service="order-book"} | json | latency > 100

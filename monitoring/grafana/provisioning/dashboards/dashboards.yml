@@ -1,0 +1,18 @@
+# GRAFANA DASHBOARD PROVISIONING
+#
+# This tells Grafana to load dashboards from a directory
+# You can add JSON dashboard files to the dashboards/ folder
+
+apiVersion: 1
+
+providers:
+  - name: 'default'
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: true

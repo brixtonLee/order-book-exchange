@@ -23,7 +23,8 @@
       "Bash(diesel migration run:*)",
       "Bash(psql:*)",
       "Bash(diesel print-schema:*)",
-      "Bash(src/database/schema.rs)"
+      "Bash(src/database/schema.rs)",
+      "Bash(cargo test:*)"
     ],
     "deny": [],
     "ask": []

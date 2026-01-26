@@ -109,6 +109,10 @@ impl OrderBook {
             _ => None,
         }
     }
+    
+    pub fn check_order_in_book(&self, order_id: Uuid) -> bool {
+        self.orders.contains_key(&order_id)
+    }
 
     /// Get an order by ID
     pub fn get_order(&self, order_id: Uuid) -> Option<&Order> {

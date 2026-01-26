@@ -7,11 +7,20 @@ use axum::{
 use std::sync::Arc;
 
 use crate::datasource::DatasourceManager;
+use crate::rabbitmq::RabbitMQService;
 use crate::models::datasource::*;
 use super::responses::ErrorResponse;
+use crate::ctrader_fix::market_data::MarketTick;
+use tokio::sync::mpsc;
 
 /// Shared state for datasource endpoints
-pub type DatasourceState = Arc<DatasourceManager>;
+/// Contains datasource manager, optional RabbitMQ service, and tick distributor sender
+#[derive(Clone)]
+pub struct DatasourceState {
+    pub manager: Arc<DatasourceManager>,
+    pub rabbitmq_service: Option<Arc<RabbitMQService>>,
+    pub tick_distributor_tx: Option<mpsc::UnboundedSender<MarketTick>>,
+}
 
 /// Start FIX connection
 #[utoipa::path(
@@ -26,7 +35,7 @@ pub type DatasourceState = Arc<DatasourceManager>;
     tag = "datasource"
 )]
 pub async fn start_datasource(
-    State(manager): State<DatasourceState>,
+    State(state): State<DatasourceState>,
     Json(request): Json<StartDatasourceRequest>,
 ) -> Result<Json<StartDatasourceResponse>, DatasourceError> {
     let config = FixConfig {
@@ -35,9 +44,19 @@ pub async fn start_datasource(
         credentials: request.credentials,
     };
 
-    manager.start_live_fix(config).await.map_err(|e| {
-        DatasourceError::StartFailed(e)
-    })?;
+    // Get tick distributor sender
+    let tick_tx = state
+        .tick_distributor_tx
+        .clone()
+        .ok_or_else(|| DatasourceError::StartFailed(
+            "Tick distributor not configured".to_string()
+        ))?;
+
+    state
+        .manager
+        .start_live_fix(config, tick_tx)
+        .await
+        .map_err(|e| DatasourceError::StartFailed(e))?;
 
     Ok(Json(StartDatasourceResponse {
         status: "connecting".to_string(),
@@ -57,9 +76,9 @@ pub async fn start_datasource(
     tag = "datasource"
 )]
 pub async fn stop_datasource(
-    State(manager): State<DatasourceState>,
+    State(state): State<DatasourceState>,
 ) -> Result<Json<StopDatasourceResponse>, DatasourceError> {
-    manager.stop().await.map_err(|e| {
+    state.manager.stop().await.map_err(|e| {
         DatasourceError::StopFailed(e)
     })?;
 
@@ -79,9 +98,9 @@ pub async fn stop_datasource(
     tag = "datasource"
 )]
 pub async fn get_datasource_status(
-    State(manager): State<DatasourceState>,
+    State(state): State<DatasourceState>,
 ) -> Json<DatasourceStatus> {
-    Json(manager.get_status().await)
+    Json(state.manager.get_status().await)
 }
 
 /// Get system health
@@ -94,9 +113,9 @@ pub async fn get_datasource_status(
     tag = "health"
 )]
 pub async fn get_health(
-    State(manager): State<DatasourceState>,
+    State(state): State<DatasourceState>,
 ) -> Json<HealthStatus> {
-    Json(manager.get_health().await)
+    Json(state.manager.get_health().await)
 }
 
 

@@ -56,6 +56,9 @@ impl IntoResponse for OrderBookError {
             OrderBookError::MatchingError(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
             }
+            OrderBookError::LockError(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
+            }
         };
 
         let body = Json(ErrorResponse {
@@ -99,8 +102,15 @@ pub async fn submit_order(
     State(engine): State<AppState>,
     Json(request): Json<SubmitOrderRequest>,
 ) -> Result<(StatusCode, Json<SubmitOrderResponse>), OrderBookError> {
+    // Create iceberg config if both fields are provided
+    let iceberg = if let (Some(total), Some(display)) = (request.iceberg_total_quantity, request.iceberg_display_quantity) {
+        Some(crate::models::IcebergConfig::new(total, display))
+    } else {
+        None
+    };
+
     // Create order with all options
-    let order = Order::new_with_options(
+    let mut order = Order::new_with_options(
         request.symbol,
         request.side,
         request.order_type,
@@ -112,6 +122,13 @@ pub async fn submit_order(
         request.post_only,
         request.expire_time,
     );
+
+    // Attach iceberg config if provided
+    if let Some(iceberg_config) = iceberg {
+        order.iceberg = Some(iceberg_config);
+        // Override quantity with display quantity for iceberg orders
+        order.quantity = request.iceberg_display_quantity.unwrap();
+    }
 
     // Add to engine
     let (filled_order, trades) = engine.add_order(order)?;
@@ -209,8 +226,8 @@ pub async fn get_order_book(
     State(engine): State<AppState>,
     Path(symbol): Path<String>,
     Query(params): Query<DepthQuery>,
-) -> Json<OrderBookResponse> {
-    let book = engine.get_order_book(&symbol);
+) -> Result<Json<OrderBookResponse>, OrderBookError> {
+    let book = engine.get_order_book(&symbol)?;
 
     // Convert bids (take top N, highest to lowest)
     let bids: Vec<PriceLevelResponse> = book
@@ -241,7 +258,7 @@ pub async fn get_order_book(
         mid_price: book.get_mid_price(),
     };
 
-    Json(response)
+    Ok(Json(response))
 }
 
 /// Get spread metrics
@@ -259,10 +276,10 @@ pub async fn get_order_book(
 pub async fn get_spread_metrics(
     State(engine): State<AppState>,
     Path(symbol): Path<String>,
-) -> Json<SpreadMetricsResponse> {
-    let book = engine.get_order_book(&symbol);
+) -> Result<Json<SpreadMetricsResponse>, OrderBookError> {
+    let book = engine.get_order_book(&symbol)?;
     let metrics = calculate_spread_metrics(&book);
-    Json(metrics)
+    Ok(Json(metrics))
 }
 
 /// Get recent trades
@@ -282,8 +299,8 @@ pub async fn get_trades(
     State(engine): State<AppState>,
     Path(symbol): Path<String>,
     Query(params): Query<TradeQuery>,
-) -> Json<TradeListResponse> {
-    let trades = engine.get_recent_trades(&symbol, params.limit);
+) -> Result<Json<TradeListResponse>, OrderBookError> {
+    let trades = engine.get_recent_trades(&symbol, params.limit)?;
 
     let trade_responses: Vec<TradeResponse> = trades.into_iter().map(|t| t.into()).collect();
 
@@ -293,7 +310,7 @@ pub async fn get_trades(
         count: trade_responses.len(),
     };
 
-    Json(response)
+    Ok(Json(response))
 }
 
 /// Get exchange metrics
@@ -305,16 +322,16 @@ pub async fn get_trades(
         (status = 200, description = "Exchange-wide metrics", body = ExchangeMetricsResponse)
     )
 )]
-pub async fn get_exchange_metrics(State(engine): State<AppState>) -> Json<ExchangeMetricsResponse> {
+pub async fn get_exchange_metrics(State(engine): State<AppState>) -> Result<Json<ExchangeMetricsResponse>, OrderBookError> {
     let response = ExchangeMetricsResponse {
-        total_trades: engine.get_total_trades(),
-        total_volume: engine.get_total_volume(),
-        total_fees_collected: engine.get_total_fees(),
-        active_orders: engine.get_total_active_orders(),
-        symbols: engine.get_symbols(),
+        total_trades: engine.get_total_trades()?,
+        total_volume: engine.get_total_volume()?,
+        total_fees_collected: engine.get_total_fees()?,
+        active_orders: engine.get_total_active_orders()?,
+        symbols: engine.get_symbols()?,
     };
 
-    Json(response)
+    Ok(Json(response))
 }
 
 /// Get order book microstructure metrics
@@ -334,13 +351,13 @@ pub async fn get_microstructure_metrics(
     State(engine): State<AppState>,
     Path(symbol): Path<String>,
     Query(params): Query<DepthQuery>,
-) -> Result<Json<MicrostructureMetrics>, StatusCode> {
-    let book = engine.get_order_book(&symbol);
+) -> Result<Json<MicrostructureMetrics>, OrderBookError> {
+    let book = engine.get_order_book(&symbol)?;
 
     let depth = if params.depth == default_depth() { 5 } else { params.depth };
 
     match MicrostructureMetrics::from_order_book(&book, depth) {
         Some(metrics) => Ok(Json(metrics)),
-        None => Err(StatusCode::NOT_FOUND),
+        None => Err(OrderBookError::InvalidSymbol(format!("No metrics available for symbol: {}", symbol))),
     }
 }

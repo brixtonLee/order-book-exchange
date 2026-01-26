@@ -1,0 +1,55 @@
+# Auto detect text files and normalize line endings to LF in the repository
+* text=auto eol=lf
+
+# Rust source files - always LF
+*.rs text eol=lf
+*.toml text eol=lf
+
+# Documentation - always LF
+*.md text eol=lf
+*.txt text eol=lf
+
+# Configuration files - always LF
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.xml text eol=lf
+*.env text eol=lf
+.env* text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# SQL files - always LF
+*.sql text eol=lf
+
+# Shell scripts - always LF (critical for Unix execution)
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Batch scripts - always CRLF (Windows requirement)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files - never touch
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.tgz binary
+*.so binary
+*.dylib binary
+*.dll binary
+*.exe binary
+*.wasm binary
+
+# Cargo.lock - always LF (important for reproducible builds)
+Cargo.lock text eol=lf
+
+# Linguist overrides (GitHub language detection)
+*.rs linguist-language=Rust

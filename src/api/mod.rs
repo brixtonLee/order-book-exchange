@@ -1,3 +1,4 @@
+pub mod algorithm_handlers;
 pub mod database_handlers;
 pub mod datasource_handlers;
 pub mod handlers;
@@ -5,6 +6,8 @@ pub mod openapi;
 pub mod rabbitmq_handlers;
 pub mod responses;
 pub mod routes;
+pub mod stop_order_handlers;
+pub mod testing_handlers;
 
 pub use database_handlers::*;
 pub use datasource_handlers::*;
